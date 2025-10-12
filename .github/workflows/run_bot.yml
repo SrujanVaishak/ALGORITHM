@@ -2,7 +2,7 @@ name: Ultimate Master Algo Bot
 
 on:
   schedule:
-    # Run Monday to Friday at 9:10 AM IST (3:40 UTC)
+    # Runs Monday to Friday at 9:10 AM IST (3:40 UTC)
     - cron: '40 3 * * 1-5'
   workflow_dispatch:  # Manual trigger
 
