@@ -1,15 +1,15 @@
-name: Ultimate Master Algo Bot
+name: Test Algo (2:15-2:18 AM IST)
 
 on:
   schedule:
-    # Run Monday to Friday at 9:10 AM IST (3:40 UTC) and ensure it runs till 3:30 PM IST
-    - cron: '40 3 * * 1-5'
+    # Run at 2:15 AM IST (8:45 PM UTC previous day)
+    - cron: '45 20 * * *'
   workflow_dispatch:  # Manual trigger
 
 jobs:
-  run-algo:
+  test-algo:
     runs-on: ubuntu-latest
-    timeout-minutes: 480  # Max 8 hours (9:10 AM to 5:10 PM)
+    timeout-minutes: 10  # 10 minutes max
 
     steps:
     - name: Checkout repository
@@ -25,7 +25,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install ta yfinance requests pyotp pandas SmartApi logzero websocket-client smartapi-python datetime pycryptodome multitasking peewee
 
-    - name: Set timezone to IST and run algo
+    - name: Run Test (2:15 AM - 2:18 AM IST)
       env:
         API_KEY: ${{ secrets.API_KEY }}
         CLIENT_CODE: ${{ secrets.CLIENT_CODE }}
@@ -34,30 +34,26 @@ jobs:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         CHAT_ID: ${{ secrets.CHAT_ID }}
       run: |
-        echo "🚀 Starting Ultimate Master Algo at $(TZ='Asia/Kolkata' date)"
-        echo "🕘 Current IST time: $(TZ='Asia/Kolkata' date '+%H:%M:%S')"
+        echo "🧪 STARTING TEST at $(TZ='Asia/Kolkata' date)"
+        echo "🕒 Current IST: $(TZ='Asia/Kolkata' date '+%H:%M:%S')"
         
-        # Run the algorithm continuously until 3:30 PM IST
-        while true; do
-          CURRENT_TIME_IST=$(TZ='Asia/Kolkata' date '+%H:%M')
-          echo "🕒 Checking time: $CURRENT_TIME_IST IST"
+        # Run for exactly 3 minutes (2:15 - 2:18 AM IST)
+        end_time=$(date -d "3 minutes" +%s)
+        
+        while [ $(date +%s) -lt $end_time ]; do
+          CURRENT_TIME_IST=$(TZ='Asia/Kolkata' date '+%H:%M:%S')
+          echo "⏰ Running at: $CURRENT_TIME_IST IST"
           
-          # Stop at 3:30 PM IST
-          if [[ "$CURRENT_TIME_IST" > "15:30" ]]; then
-            echo "🛑 Market closed at 3:30 PM IST - Stopping algorithm"
-            send_telegram "🛑 Market closed at 3:30 PM IST - Algorithm stopped automatically"
-            break
-          fi
-          
-          # Run one iteration of the algorithm
+          # Run one iteration
           python ultimate_algo.py
           
-          # Wait 30 seconds before next iteration
-          sleep 30
+          # Wait 10 seconds
+          sleep 10
         done
         
-        echo "✅ Ultimate Master Algo completed at $(TZ='Asia/Kolkata' date)"
+        echo "✅ TEST COMPLETED at $(TZ='Asia/Kolkata' date '+%H:%M:%S')"
+        echo "🛑 Stopped at 2:18 AM IST as scheduled"
 
-    - name: Notify workflow completion
+    - name: Notify test completion
       run: |
-        echo "✅ Ultimate Master Algo workflow finished at $(TZ='Asia/Kolkata' date)"
+        echo "🎯 Test workflow completed successfully at $(TZ='Asia/Kolkata' date)"
