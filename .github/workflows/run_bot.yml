@@ -1,9 +1,9 @@
-name: Test Algo (2:20-2:22 AM IST)
+name: Test Algo (2:25-2:27 AM IST)
 
 on:
   schedule:
-    # Run at 2:20 AM IST (8:50 PM UTC previous day)
-    - cron: '50 20 * * *'
+    # Run at 2:25 AM IST (8:55 PM UTC previous day)
+    - cron: '55 20 * * *'
   workflow_dispatch:  # Manual trigger
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install ta yfinance requests pyotp pandas SmartApi logzero websocket-client smartapi-python datetime pycryptodome multitasking peewee
 
-    - name: Run Test (2:20 AM - 2:22 AM IST)
+    - name: Run Test (2:25 AM - 2:27 AM IST)
       env:
         API_KEY: ${{ secrets.API_KEY }}
         CLIENT_CODE: ${{ secrets.CLIENT_CODE }}
@@ -37,7 +37,7 @@ jobs:
         echo "🧪 STARTING TEST at $(TZ='Asia/Kolkata' date)"
         echo "🕒 Current IST: $(TZ='Asia/Kolkata' date '+%H:%M:%S')"
         
-        # Run for exactly 2 minutes (2:20 - 2:22 AM IST)
+        # Run for exactly 2 minutes (2:25 - 2:27 AM IST)
         end_time=$(date -d "2 minutes" +%s)
         
         while [ $(date +%s) -lt $end_time ]; do
@@ -52,7 +52,7 @@ jobs:
         done
         
         echo "✅ TEST COMPLETED at $(TZ='Asia/Kolkata' date '+%H:%M:%S')"
-        echo "🛑 Stopped at 2:22 AM IST as scheduled"
+        echo "🛑 Stopped at 2:27 AM IST as scheduled"
 
     - name: Notify test completion
       run: |
