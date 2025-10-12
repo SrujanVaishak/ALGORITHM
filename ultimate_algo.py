@@ -2,6 +2,7 @@
 # ✅ NIFTY + BANKNIFTY + SENSEX + FINNIFTY + MIDCPNIFTY + EICHERMOT + TRENT + RELIANCE
 # ✅ Institutional Flow + OI/Delta Layers + Liquidity Hunting + Multi-timeframe + Telegram
 # ✅ All indices running simultaneously in parallel threads
+
 import os
 import time
 import requests
@@ -11,7 +12,7 @@ import ta
 import warnings
 import pyotp
 import math
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from SmartApi.smartConnect import SmartConnect
 import threading
 
@@ -45,8 +46,22 @@ def send_telegram(msg, reply_to=None):
 
 # --------- MARKET HOURS ---------
 def is_market_open():
-    now = datetime.now().time()
-    return dtime(9,15) <= now <= dtime(15,30)
+    # Get current time in IST (UTC +5:30)
+    utc_now = datetime.utcnow()
+    ist_now = utc_now + timedelta(hours=5, minutes=30)
+    current_time_ist = ist_now.time()
+    
+    # Check if current IST time is between 9:15 AM and 3:30 PM
+    market_open = dtime(9,15) <= current_time_ist <= dtime(15,30)
+    
+    return market_open
+
+# --------- AUTO STOP AT 3:30 PM IST ---------
+def should_stop_trading():
+    utc_now = datetime.utcnow()
+    ist_now = utc_now + timedelta(hours=5, minutes=30)
+    current_time_ist = ist_now.time()
+    return current_time_ist >= dtime(15,30)
 
 # --------- STRIKE ROUNDING FOR ALL INDICES ---------
 def round_strike(index, price):
@@ -423,6 +438,11 @@ def monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id):
     weakness_sent = False
     in_trade=False
     while True:
+        # Auto stop at 3:30 PM IST
+        if should_stop_trading():
+            send_telegram(f"🛑 Market closed - Stopping monitoring for {symbol}", reply_to=thread_id)
+            break
+            
         price=fetch_option_price(symbol)
         if not price: time.sleep(10); continue
         price=round(price)
@@ -522,7 +542,15 @@ def send_signal(index,side,df,fakeout):
 
 # --------- MAIN LOOP (ALL INDICES PARALLEL) ---------
 def run_algo_parallel():
-    if not is_market_open(): return
+    if not is_market_open(): 
+        print("❌ Market closed - skipping iteration")
+        return
+        
+    if should_stop_trading():
+        print("🛑 Market closing time reached - stopping")
+        send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
+        exit(0)
+        
     threads=[]
     all_indices = ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY", "EICHERMOT", "TRENT", "RELIANCE"]
     
@@ -534,8 +562,14 @@ def run_algo_parallel():
 
 # --------- START ---------
 send_telegram("🚀 ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
+
 while True:
     try:
+        # Auto stop at 3:30 PM IST
+        if should_stop_trading():
+            send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
+            break
+            
         run_algo_parallel()
         time.sleep(30)
     except Exception as e:
