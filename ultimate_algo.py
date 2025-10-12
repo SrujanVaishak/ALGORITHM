@@ -529,7 +529,7 @@ def send_signal(index,side,df,fakeout):
     entry=round(price+5)
     sl=round(price-atr)
     targets=[round(price+atr*1.5),round(price+atr*2)]
-    msg=(f"🔊 {index} {side} VSSIGNAL CONFIRMED\n"
+    msg=(f" GIT🔊 {index} {side} VSSIGNAL CONFIRMED\n"
          f"🔹 Strike: {strike}\n"
          f"🟩 Buy Above ₹{entry}\n"
          f"🔵 SL: ₹{sl}\n"
@@ -561,7 +561,7 @@ def run_algo_parallel():
     for t in threads: t.join()
 
 # --------- START ---------
-send_telegram("🚀 ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
+send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
 
 while True:
     try:
