@@ -50,7 +50,7 @@ jobs:
           fi
           
           # Run one iteration of the algorithm
-          python ultimate_algo_single.py
+          python ultimate_algo.py
           
           # Wait 30 seconds before next iteration
           sleep 30
