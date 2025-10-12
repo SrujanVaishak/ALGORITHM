@@ -1,48 +1,43 @@
-name: Run Ultimate Master Algo
+name: Ultimate Master Algo Bot
 
 on:
   schedule:
-    # Runs every weekday at 9:10 AM IST (UTC+5:30 = 3:40 AM UTC)
-    - cron: '40 3 * * 1-5'
-  workflow_dispatch: # optional manual trigger
+    # Run Monday to Friday at 9:10 AM IST (3:40 UTC) and 3:30 PM IST (10:00 UTC)
+    - cron: '40 3 * * 1-5'  # 9:10 AM IST
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
-  run-bot:
+  run-algo:
     runs-on: ubuntu-latest
-    timeout-minutes: 400 # ~6.5 hours (9:10 → 15:30)
-    env:
-      API_KEY: ${{ secrets.API_KEY }}
-      CLIENT_CODE: ${{ secrets.CLIENT_CODE }}
-      PASSWORD: ${{ secrets.PASSWORD }}
-      TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
-      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      CHAT_ID: ${{ secrets.CHAT_ID }}
+    timeout-minutes: 480  # 8 hours max
+    
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Ultimate Algo
-        run: |
-          echo "Starting Ultimate Master Algo..."
-          # Run in background and ensure it stops at 3:30 PM IST
-          python ultimate_algo.py &
-          PID=$!
-          # calculate seconds until 3:30 PM IST
-          END_TIME=$(date -d "15:30 IST today" +%s)
-          NOW=$(date +%s)
-          SLEEP_SEC=$((END_TIME - NOW))
-          if [ $SLEEP_SEC -gt 0 ]; then
-            sleep $SLEEP_SEC
-          fi
-          echo "Stopping Ultimate Master Algo..."
-          kill $PID || true
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run Ultimate Master Algo
+      env:
+        API_KEY: ${{ secrets.API_KEY }}
+        CLIENT_CODE: ${{ secrets.CLIENT_CODE }}
+        PASSWORD: ${{ secrets.PASSWORD }}
+        TOTP_SECRET: ${{ secrets.TOTP_SECRET }}
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        CHAT_ID: ${{ secrets.CHAT_ID }}
+      run: |
+        echo "🚀 Starting Ultimate Master Algo at $(date)"
+        python ultimate_algo.py
+        
+    - name: Stop at 3:30 PM IST
+      if: always()
+      run: |
+        echo "🛑 Algorithm stopped at 3:30 PM IST - $(date)"
