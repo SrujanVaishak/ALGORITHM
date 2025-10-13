@@ -33,6 +33,10 @@ feedToken = client.getfeedToken()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# --- Added: guards to avoid repeating the same Telegram message many times
+STARTED_SENT = False
+STOP_SENT = False
+
 def send_telegram(msg, reply_to=None):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -617,7 +621,10 @@ def monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id):
     while True:
         # Auto stop at 3:30 PM IST
         if should_stop_trading():
-            send_telegram(f"🛑 Market closed - Stopping monitoring for {symbol}", reply_to=thread_id)
+            global STOP_SENT
+            if not STOP_SENT:
+                send_telegram(f"🛑 Market closed - Stopping monitoring for {symbol}", reply_to=thread_id)
+                STOP_SENT = True
             # mark closed if was open
             for idx, val in active_trades.items():
                 if val and val.get("symbol") == symbol:
@@ -748,8 +755,10 @@ def run_algo_parallel():
         return
         
     if should_stop_trading():
-        print("🛑 Market closing time reached - stopping")
-        send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
+        global STOP_SENT
+        if not STOP_SENT:
+            send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
+            STOP_SENT = True
         exit(0)
         
     threads=[]
@@ -762,13 +771,18 @@ def run_algo_parallel():
     for t in threads: t.join()
 
 # --------- START ---------
-send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
+# Send startup once
+if not STARTED_SENT:
+    send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
+    STARTED_SENT = True
 
 while True:
     try:
         # Auto stop at 3:30 PM IST
         if should_stop_trading():
-            send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
+            if not STOP_SENT:
+                send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
+                STOP_SENT = True
             break
             
         run_algo_parallel()
