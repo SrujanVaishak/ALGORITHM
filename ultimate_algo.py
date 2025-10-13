@@ -252,6 +252,47 @@ def liquidity_zone_entry_check(price, bull_liq, bear_liq):
             return None
     return None
 
+# 🚨 NEW: BOTTOM-FISHING / INSTITUTIONAL LIQUIDITY LAYER 🚨
+def detect_bottom_fishing(index, df):
+    """
+    Detects potential institutional bottom-fishing entry.
+    Only triggers if price reacts off support zones / absorption patterns.
+    Returns "CE" or "PE" or None.
+    """
+    try:
+        close = ensure_series(df['Close'])
+        low = ensure_series(df['Low'])
+        high = ensure_series(df['High'])
+        volume = ensure_series(df['Volume'])
+        if len(close) < 6: 
+            return None
+
+        # Identify bull liquidity zones
+        bull_liq, bear_liq = institutional_liquidity_hunt(index, df)
+        last_close = float(close.iloc[-1])
+
+        # Detect absorption: long lower wick + recovery + volume divergence
+        wick = last_close - low.iloc[-1]
+        body = abs(close.iloc[-1] - close.iloc[-2])
+        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
+        vol_ratio = volume.iloc[-1] / (vol_avg if vol_avg > 0 else 1)
+
+        # Oversold absorption criteria
+        if wick > body * 1.5 and vol_ratio > 1.2:
+            # check near bull liquidity
+            for zone in bull_liq:
+                if abs(last_close - zone) <= 5:
+                    return "CE"
+        # Mirror logic for distribution at top
+        bear_wick = high.iloc[-1] - last_close
+        if bear_wick > body * 1.5 and vol_ratio > 1.2:
+            for zone in bear_liq:
+                if abs(last_close - zone) <= 5:
+                    return "PE"
+    except:
+        return None
+    return None
+
 # --------- NEW INSTITUTIONAL LAYERS (PULLBACK / TRAP / ORDERFLOW-MIMIC) ---------
 def detect_pullback_reversal(df):
     """
@@ -359,6 +400,14 @@ def analyze_index_signal(index):
     if close5.isna().iloc[-1] or close5.isna().iloc[-2]:
         return None
 
+    last_close=float(close5.iloc[-1])
+    prev_close=float(close5.iloc[-2])
+
+    # 🚨 1️⃣ BOTTOM-FISHING HIGH-PRIORITY LAYER (NEW)
+    bottom_sig = detect_bottom_fishing(index, df5)
+    if bottom_sig:
+        return bottom_sig, df5, False
+
     # EMA/RSI indicators
     ema9_5=float(ta.trend.EMAIndicator(close5,9).ema_indicator().iloc[-1])
     ema21_5=float(ta.trend.EMAIndicator(close5,21).ema_indicator().iloc[-1])
@@ -375,9 +424,6 @@ def analyze_index_signal(index):
     ema9_15=float(ta.trend.EMAIndicator(close15,9).ema_indicator().iloc[-1])
     ema21_15=float(ta.trend.EMAIndicator(close15,21).ema_indicator().iloc[-1])
     rsi15=float(ta.momentum.RSIIndicator(close15,14).rsi().iloc[-1])
-
-    last_close=float(close5.iloc[-1])
-    prev_close=float(close5.iloc[-2])
 
     # guard against NaN values
     if math.isnan(last_close) or math.isnan(prev_close):
@@ -407,7 +453,7 @@ def analyze_index_signal(index):
     except Exception:
         pass
 
-    # Detect pullback reversal, traps, and orderflow mimics (priority)
+    # 2️⃣ Detect pullback reversal, traps, and orderflow mimics (priority)
     try:
         trap_sig = detect_institutional_trap(df5)
         if trap_sig:
@@ -456,7 +502,7 @@ def analyze_index_signal(index):
     except:
         fakeout=False
 
-    # ✅ NEW: Integrate Liquidity Hunt Layer (existing)
+    # ✅ 3️⃣ Integrate Liquidity Hunt Layer (existing)
     bull_liq, bear_liq = institutional_liquidity_hunt(index, df5)
     liquidity_side = liquidity_zone_entry_check(last_close, bull_liq, bear_liq)
     if liquidity_side:
@@ -771,21 +817,26 @@ def run_algo_parallel():
     for t in threads: t.join()
 
 # --------- START ---------
-# Send startup once
-if not STARTED_SENT:
-    send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
-    STARTED_SENT = True
-
+# Send startup once - MOVE INSIDE LOOP
 while True:
     try:
+        # Send startup message once per session
+        if not STARTED_SENT and is_market_open():
+            send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
+            STARTED_SENT = True
+            STOP_SENT = False  # Reset stop flag for new session
+            
         # Auto stop at 3:30 PM IST
         if should_stop_trading():
             if not STOP_SENT:
                 send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
                 STOP_SENT = True
+                STARTED_SENT = False  # Reset for next day
             break
             
-        run_algo_parallel()
+        if is_market_open():
+            run_algo_parallel()
+            
         time.sleep(30)
     except Exception as e:
         send_telegram(f"⚠️ Error in main loop: {e}")
