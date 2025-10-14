@@ -765,34 +765,58 @@ def trade_thread(index):
 
 # --------- SEND SIGNAL ---------
 def send_signal(index,side,df,fakeout):
-    ltp=float(ensure_series(df["Close"]).iloc[-1])
-    strike=round_strike(index,ltp)
+    """
+    IMPORTANT FIX: determine strike from the *underlying* index close (nearest option strike).
+    The option premium (price) is fetched after symbol is built. The Telegram message will now
+    show both: underlying LTP (used to pick strike) and option premium entry.
+    """
+    # underlying price (index close) -> determine strike from it
+    try:
+        underlying_ltp = float(ensure_series(df["Close"]).iloc[-1])
+    except Exception:
+        underlying_ltp = None
+
+    strike = round_strike(index, underlying_ltp)
     if strike is None:
-        # cannot determine strike because LTP missing or invalid
-        send_telegram(f"⚠️ {index}: could not determine strike (ltp missing). Signal skipped.")
+        # cannot determine strike because underlying LTP missing or invalid
+        send_telegram(f"⚠️ {index}: could not determine strike (underlying ltp missing). Signal skipped.")
         return
-    symbol=get_option_symbol(index,EXPIRIES[index],strike,side)
-    price=fetch_option_price(symbol)
-    if not price: return
-    high=ensure_series(df["High"])
-    low=ensure_series(df["Low"])
-    close=ensure_series(df["Close"])
-    atr=float(ta.volatility.AverageTrueRange(high,low,close,14).average_true_range().iloc[-1])
-    entry=round(price+5)
-    sl=round(price-atr)
-    targets=[round(price+atr*1.5),round(price+atr*2)]
+
+    symbol = get_option_symbol(index, EXPIRIES[index], strike, side)
+
+    # now fetch option premium (ltp) for that symbol
+    price = fetch_option_price(symbol)
+    if price is None:
+        # couldn't fetch option LTP — inform, but still send strike/underlying info
+        send_telegram(f"⚠️ {index}: option LTP not available for {symbol}. Strike {strike} selected (Underlying: {underlying_ltp}).")
+        return
+
+    # compute ATR & targets based on option premium as earlier
+    high = ensure_series(df["High"])
+    low = ensure_series(df["Low"])
+    close = ensure_series(df["Close"])
+    atr = float(ta.volatility.AverageTrueRange(high,low,close,14).average_true_range().iloc[-1])
+    entry = round(price + 5)
+    sl = round(price - atr)
+    targets = [round(price + atr*1.5), round(price + atr*2)]
+
+    # Compose message — now includes underlying LTP and selected strike explicitly
     msg=(f" GIT🔊 {index} {side} VSSIGNAL CONFIRMED\n"
-         f"🔹 Strike: {strike}\n"
-         f"🟩 Buy Above ₹{entry}\n"
-         f"🔵 SL: ₹{sl}\n"
-         f"🌟 Targets: {targets[0]} / {targets[1]}\n"
+         f"🔹 Strike (nearest to underlying): {strike}\n"
+         f"🔸 Underlying LTP used for strike selection: {underlying_ltp}\n"
+         f"🟩 Option Premium Entry Above: ₹{entry}   (Option LTP currently: ₹{round(price,2)})\n"
+         f"🔵 SL (premium): ₹{sl}\n"
+         f"🌟 Targets (premium): {targets[0]} / {targets[1]}\n"
          f"⚡ Fakeout: {'YES' if fakeout else 'NO'}")
-    thread_id=send_telegram(msg)
+    # also print to console for debugging
+    print(msg)
+
+    thread_id = send_telegram(msg)
     # mark active trade with status OPEN
-    active_trades[index]={"symbol":symbol,"entry":entry,"sl":sl,"targets":targets,"thread":thread_id,"status":"OPEN"}
-    monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id)
+    active_trades[index] = {"symbol": symbol, "entry": entry, "sl": sl, "targets": targets, "thread": thread_id, "status": "OPEN"}
+    monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id)
     # once monitor returns, ensure status is CLOSED (monitor_price_live will set it on exit)
-    active_trades[index]=None
+    active_trades[index] = None
 
 # --------- MAIN LOOP (ALL INDICES PARALLEL) ---------
 def run_algo_parallel():
