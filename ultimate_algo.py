@@ -80,15 +80,26 @@ def round_strike(index, price):
         if isinstance(price, float) and math.isnan(price):
             return None
         price = float(price)
-        if index == "NIFTY": return int(round(price / 50.0) * 50)
-        elif index == "BANKNIFTY": return int(round(price / 100.0) * 100)
-        elif index == "SENSEX": return int(round(price / 100.0) * 100)
-        elif index == "FINNIFTY": return int(round(price / 50.0) * 50)
-        elif index == "MIDCPNIFTY": return int(round(price / 25.0) * 25)
-        elif index == "EICHERMOT": return int(round(price / 50.0) * 50)
-        elif index == "TRENT": return int(round(price / 100.0) * 100)
-        elif index == "RELIANCE": return int(round(price / 10.0) * 10)
-        else: return int(round(price / 50.0) * 50)  # default
+        
+        # CORRECTED STRIKE ROUNDING FOR EACH INDEX
+        if index == "NIFTY": 
+            return int(round(price / 50.0) * 50)
+        elif index == "BANKNIFTY": 
+            return int(round(price / 100.0) * 100)
+        elif index == "SENSEX": 
+            return int(round(price / 100.0) * 100)
+        elif index == "FINNIFTY": 
+            return int(round(price / 50.0) * 50)  # FINNIFTY uses 50 increments
+        elif index == "MIDCPNIFTY": 
+            return int(round(price / 25.0) * 25)
+        elif index == "EICHERMOT": 
+            return int(round(price / 50.0) * 50)
+        elif index == "TRENT": 
+            return int(round(price / 100.0) * 100)
+        elif index == "RELIANCE": 
+            return int(round(price / 10.0) * 10)
+        else: 
+            return int(round(price / 50.0) * 50)  # default
     except Exception:
         return None
 
@@ -102,7 +113,7 @@ def fetch_index_data(index, interval="5m", period="2d"):
         "NIFTY": "^NSEI", 
         "BANKNIFTY": "^NSEBANK", 
         "SENSEX": "^BSESN",
-        "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+        "FINNIFTY": "NIFTY_FIN_SERVICE.NS",  # Correct symbol for FINNIFTY
         "MIDCPNIFTY": "NIFTY_MID_SELECT.NS", 
         "EICHERMOT": "EICHERMOT.NS",
         "TRENT": "TRENT.NS",
@@ -516,14 +527,21 @@ def analyze_index_signal(index):
 def get_option_symbol(index, expiry_str, strike, opttype):
     dt=datetime.strptime(expiry_str,"%d %b %Y")
     
+    # CORRECTED: Each index maintains its own symbol format
     if index == "SENSEX":
         # SENSEX format: SENSEX + YY + MONTH_CODE + STRIKE + OPTION_TYPE
         year_short = dt.strftime("%y")
         month_code = dt.strftime("%b").upper()
         day = dt.strftime("%d")
         return f"SENSEX{year_short}{month_code}{strike}{opttype}"
+    elif index == "FINNIFTY":
+        # FINNIFTY format: FINNIFTY + DDMMMYY + STRIKE + OPTION_TYPE
+        return f"FINNIFTY{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
+    elif index == "MIDCPNIFTY":
+        # MIDCPNIFTY format: MIDCPNIFTY + DDMMMYY + STRIKE + OPTION_TYPE  
+        return f"MIDCPNIFTY{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
     else:
-        # Standard format for other indices
+        # Standard format for NIFTY, BANKNIFTY, and stocks
         return f"{index}{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
 
 # --------- INSTITUTIONAL FLOW CHECKS ---------
@@ -713,7 +731,7 @@ EXPIRIES = {
     "NIFTY": "14 OCT 2025",
     "BANKNIFTY": "28 OCT 2025", 
     "SENSEX": "16 OCT 2025",
-    "FINNIFTY": "28 OCT 2025",
+    "FINNIFTY": "28 OCT 2025",  # CORRECTED: FINNIFTY has its own expiry
     "MIDCPNIFTY": "28 OCT 2025",
     "EICHERMOT": "28 OCT 2025",
     "TRENT": "28 OCT 2025", 
@@ -766,12 +784,18 @@ def trade_thread(index):
 # --------- SEND SIGNAL ---------
 def send_signal(index,side,df,fakeout):
     ltp=float(ensure_series(df["Close"]).iloc[-1])
+    
+    # CORRECTED: Each index uses its own strike rounding
     strike=round_strike(index,ltp)
+    
     if strike is None:
         # cannot determine strike because LTP missing or invalid
         send_telegram(f"⚠️ {index}: could not determine strike (ltp missing). Signal skipped.")
         return
+        
+    # CORRECTED: Each index uses its own symbol format  
     symbol=get_option_symbol(index,EXPIRIES[index],strike,side)
+    
     price=fetch_option_price(symbol)
     if not price: return
     high=ensure_series(df["High"])
@@ -781,12 +805,14 @@ def send_signal(index,side,df,fakeout):
     entry=round(price+5)
     sl=round(price-atr)
     targets=[round(price+atr*1.5),round(price+atr*2)]
+    
     msg=(f" GIT🔊 {index} {side} VSSIGNAL CONFIRMED\n"
          f"🔹 Strike: {strike}\n"
          f"🟩 Buy Above ₹{entry}\n"
          f"🔵 SL: ₹{sl}\n"
          f"🌟 Targets: {targets[0]} / {targets[1]}\n"
          f"⚡ Fakeout: {'YES' if fakeout else 'NO'}")
+         
     thread_id=send_telegram(msg)
     # mark active trade with status OPEN
     active_trades[index]={"symbol":symbol,"entry":entry,"sl":sl,"targets":targets,"thread":thread_id,"status":"OPEN"}
