@@ -1,8 +1,3 @@
-# ✅ ULTIMATE MASTER OPTION ALGO WITH INSTITUTIONAL LAYERS + ALL INDICES PARALLEL
-# ✅ NIFTY + BANKNIFTY + SENSEX + FINNIFTY + MIDCPNIFTY + EICHERMOT + TRENT + RELIANCE
-# ✅ Institutional Flow + OI/Delta Layers + Liquidity Hunting + Multi-timeframe + Telegram
-# ✅ All indices running simultaneously in parallel threads
-
 import os
 import time
 import requests
@@ -15,8 +10,32 @@ import math
 from datetime import datetime, time as dtime, timedelta
 from SmartApi.smartConnect import SmartConnect
 import threading
+import numpy as np
 
 warnings.filterwarnings("ignore")
+
+# ---------------- CONFIG ----------------
+OPENING_PLAY_ENABLED = True
+OPENING_START = dtime(9,15)
+OPENING_END = dtime(9,45)
+
+EXPIRY_ACTIONABLE = True
+EXPIRY_INFO_ONLY = False
+EXPIRY_RELAX_FACTOR = 0.7
+GAMMA_VOL_SPIKE_THRESHOLD = 1.8
+DELTA_OI_RATIO = 1.5
+MOMENTUM_VOL_AMPLIFIER = 1.3
+
+# New strategy configurations
+VCP_CONTRACTION_RATIO = 0.65
+FAULTY_BASE_BREAK_THRESHOLD = 0.15
+WYCKOFF_VOLUME_SPRING = 1.8
+LIQUIDITY_SWEEP_DISTANCE = 0.003
+PEAK_REJECTION_WICK_RATIO = 0.7
+FVG_GAP_THRESHOLD = 0.0015
+VOLUME_GAP_IMBALANCE = 2.0
+OTE_RETRACEMENT_LEVELS = [0.618, 0.786]
+DEMAND_SUPPLY_ZONE_LOOKBACK = 20
 
 # --------- ANGEL ONE LOGIN ---------
 API_KEY = os.getenv("API_KEY")
@@ -33,7 +52,6 @@ feedToken = client.getfeedToken()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# --- Added: guards to avoid repeating the same Telegram message many times
 STARTED_SENT = False
 STOP_SENT = False
 
@@ -50,17 +68,11 @@ def send_telegram(msg, reply_to=None):
 
 # --------- MARKET HOURS ---------
 def is_market_open():
-    # Get current time in IST (UTC +5:30)
     utc_now = datetime.utcnow()
     ist_now = utc_now + timedelta(hours=5, minutes=30)
     current_time_ist = ist_now.time()
-    
-    # Check if current IST time is between 9:15 AM and 3:30 PM
-    market_open = dtime(9,15) <= current_time_ist <= dtime(15,30)
-    
-    return market_open
+    return dtime(9,15) <= current_time_ist <= dtime(15,30)
 
-# --------- AUTO STOP AT 3:30 PM IST ---------
 def should_stop_trading():
     utc_now = datetime.utcnow()
     ist_now = utc_now + timedelta(hours=5, minutes=30)
@@ -69,19 +81,13 @@ def should_stop_trading():
 
 # --------- STRIKE ROUNDING FOR ALL INDICES ---------
 def round_strike(index, price):
-    """
-    Safely round a price to nearest strike step per index.
-    Returns None if price is None or NaN.
-    """
     try:
         if price is None:
             return None
-        # handle pandas NA / numpy nan
         if isinstance(price, float) and math.isnan(price):
             return None
         price = float(price)
         
-        # CORRECTED STRIKE ROUNDING FOR EACH INDEX
         if index == "NIFTY": 
             return int(round(price / 50.0) * 50)
         elif index == "BANKNIFTY": 
@@ -89,7 +95,7 @@ def round_strike(index, price):
         elif index == "SENSEX": 
             return int(round(price / 100.0) * 100)
         elif index == "FINNIFTY": 
-            return int(round(price / 50.0) * 50)  # FINNIFTY uses 50 increments
+            return int(round(price / 50.0) * 50)
         elif index == "MIDCPNIFTY": 
             return int(round(price / 25.0) * 25)
         elif index == "EICHERMOT": 
@@ -99,7 +105,7 @@ def round_strike(index, price):
         elif index == "RELIANCE": 
             return int(round(price / 10.0) * 10)
         else: 
-            return int(round(price / 50.0) * 50)  # default
+            return int(round(price / 50.0) * 50)
     except Exception:
         return None
 
@@ -113,7 +119,7 @@ def fetch_index_data(index, interval="5m", period="2d"):
         "NIFTY": "^NSEI", 
         "BANKNIFTY": "^NSEBANK", 
         "SENSEX": "^BSESN",
-        "FINNIFTY": "NIFTY_FIN_SERVICE.NS",  # Correct symbol for FINNIFTY
+        "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
         "MIDCPNIFTY": "NIFTY_MID_SELECT.NS", 
         "EICHERMOT": "EICHERMOT.NS",
         "TRENT": "TRENT.NS",
@@ -128,7 +134,6 @@ def load_token_map():
         url="https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         df=pd.DataFrame(requests.get(url,timeout=10).json())
         df.columns=[c.lower() for c in df.columns]
-        # Include both NFO and BFO for SENSEX
         df=df[df['exch_seg'].str.upper().isin(["NFO", "BFO"])]
         df['symbol']=df['symbol'].str.upper()
         return df.set_index('symbol')['token'].to_dict()
@@ -144,7 +149,6 @@ def fetch_option_price(symbol, retries=3, delay=3):
         return None
     for _ in range(retries):
         try:
-            # Determine exchange based on symbol
             exchange = "BFO" if "SENSEX" in symbol.upper() else "NFO"
             data=client.ltpData(exchange, symbol, token)
             return float(data['data']['ltp'])
@@ -156,7 +160,6 @@ def fetch_option_price(symbol, retries=3, delay=3):
 def detect_liquidity_zone(df, lookback=20):
     high_series = ensure_series(df['High']).dropna()
     low_series = ensure_series(df['Low']).dropna()
-    # fallback if not enough history
     try:
         if len(high_series) <= lookback:
             high_pool = float(high_series.max()) if len(high_series)>0 else float('nan')
@@ -172,7 +175,6 @@ def detect_liquidity_zone(df, lookback=20):
     except Exception:
         low_pool = float(low_series.min()) if len(low_series)>0 else float('nan')
 
-    # ensure numeric fallback
     if math.isnan(high_pool) and len(high_series)>0:
         high_pool = float(high_series.max())
     if math.isnan(low_pool) and len(low_series)>0:
@@ -180,13 +182,8 @@ def detect_liquidity_zone(df, lookback=20):
 
     return round(high_pool,0), round(low_pool,0)
 
-# --------- INSTITUTIONAL LIQUIDITY HUNT (robust) ---------
+# --------- INSTITUTIONAL LIQUIDITY HUNT ---------
 def institutional_liquidity_hunt(index, df):
-    """
-    Calculates pre-market and opening range liquidity zones.
-    Returns dual-sided liquidity zones for CE/PE trades.
-    """
-    # Pre-market / Overnight levels
     prev_high = None
     prev_low = None
     try:
@@ -200,7 +197,6 @@ def institutional_liquidity_hunt(index, df):
 
     high_zone, low_zone = detect_liquidity_zone(df, lookback=15)
 
-    # Options OI zones (dummy placeholder) — guard against NaN last close
     last_close_val = None
     try:
         lc = ensure_series(df['Close']).iloc[-1]
@@ -231,17 +227,13 @@ def institutional_liquidity_hunt(index, df):
     return bull_liquidity, bear_liquidity
 
 def liquidity_zone_entry_check(price, bull_liq, bear_liq):
-    """
-    Returns which side (CE/PE/BOTH) is appropriate based on price near liquidity zones.
-    Robust to None zones and NaN price.
-    """
     if price is None or (isinstance(price, float) and math.isnan(price)):
         return None
 
     for zone in bull_liq:
         if zone is None: continue
         try:
-            if abs(price - zone) <= 5:  # Threshold 5 points
+            if abs(price - zone) <= 5:
                 return "CE"
         except:
             continue
@@ -263,13 +255,449 @@ def liquidity_zone_entry_check(price, bull_liq, bear_liq):
             return None
     return None
 
-# 🚨 NEW: BOTTOM-FISHING / INSTITUTIONAL LIQUIDITY LAYER 🚨
+# 🚨 LAYER 1: OPENING-RANGE INSTITUTIONAL PLAY 🚨
+def institutional_opening_play(index, df):
+    try:
+        prev_high = float(ensure_series(df['High']).iloc[-2])
+        prev_low = float(ensure_series(df['Low']).iloc[-2])
+        prev_close = float(ensure_series(df['Close']).iloc[-2])
+        current_price = float(ensure_series(df['Close']).iloc[-1])
+    except Exception:
+        return None
+    if current_price > prev_high + 10: return "CE"
+    if current_price < prev_low - 10: return "PE"
+    if current_price > prev_close + 20: return "CE"
+    if current_price < prev_close - 20: return "PE"
+    return None
+
+# 🚨 LAYER 2: GAMMA SQUEEZE / EXPIRY LAYER 🚨
+EXPIRIES = {
+    "NIFTY": "20 OCT 2025",
+    "BANKNIFTY": "16 OCT 2025",
+    "SENSEX": "16 OCT 2025",
+    "FINNIFTY": "16 OCT 2025",
+    "MIDCPNIFTY": "16 OCT 2025",
+    "EICHERMOT": "31 OCT 2025",
+    "TRENT": "31 OCT 2025",
+    "RELIANCE": "28 OCT 2025"
+}
+
+def is_expiry_day_for_index(index):
+    try:
+        ex = EXPIRIES.get(index)
+        if not ex: return False
+        dt = datetime.strptime(ex, "%d %b %Y")
+        today = (datetime.utcnow() + timedelta(hours=5, minutes=30)).date()
+        return dt.date() == today
+    except Exception:
+        return False
+
+def detect_gamma_squeeze(index, df):
+    try:
+        close = ensure_series(df['Close']); volume = ensure_series(df['Volume']); 
+        high = ensure_series(df['High']); low = ensure_series(df['Low'])
+        if len(close) < 6: return None
+        
+        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume)>=20 else volume.mean()
+        vol_ratio = volume.iloc[-1] / (vol_avg if vol_avg>0 else 1)
+        speed = (close.iloc[-1] - close.iloc[-3]) / (abs(close.iloc[-3]) + 1e-6)
+        
+        try:
+            url=f"https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+            df_s = pd.DataFrame(requests.get(url,timeout=10).json())
+            df_s['symbol'] = df_s['symbol'].str.upper()
+            df_index = df_s[df_s['symbol'].str.contains(index)]
+            df_index['oi'] = pd.to_numeric(df_index.get('oi',0), errors='coerce').fillna(0)
+            ce_oi = df_index[df_index['symbol'].str.endswith("CE")]['oi'].sum()
+            pe_oi = df_index[df_index['symbol'].str.endswith("PE")]['oi'].sum()
+        except Exception:
+            ce_oi = pe_oi = 0
+        
+        if vol_ratio > GAMMA_VOL_SPIKE_THRESHOLD and abs(speed) > 0.002:
+            if speed > 0:
+                conf = min(1.0, (vol_ratio - 1.0) / 3.0 + (ce_oi / (pe_oi+1e-6)) * 0.1)
+                return {'side':'CE','confidence':conf}
+            else:
+                conf = min(1.0, (vol_ratio - 1.0) / 3.0 + (pe_oi / (ce_oi+1e-6)) * 0.1)
+                return {'side':'PE','confidence':conf}
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 3: SMART-MONEY DIVERGENCE 🚨
+def smart_money_divergence(df):
+    try:
+        close = ensure_series(df['Close']); volume = ensure_series(df['Volume'])
+        rsi = ta.momentum.RSIIndicator(close, 14).rsi()
+        if len(close) < 10: return None
+        
+        p_short = close.iloc[-5]; p_now = close.iloc[-1]
+        rsi_short = rsi.iloc[-5]; rsi_now = rsi.iloc[-1]
+        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume)>=20 else volume.mean()
+        vol_now = volume.iloc[-1]
+        
+        if p_now < p_short and rsi_now > rsi_short and vol_now > vol_avg*1.1:
+            return "CE"
+        if p_now > p_short and rsi_now < rsi_short and vol_now > vol_avg*1.1:
+            return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 4: STOP-HUNT DETECTOR 🚨
+def detect_stop_hunt(df):
+    try:
+        high = ensure_series(df['High']); low = ensure_series(df['Low']); 
+        close = ensure_series(df['Close']); volume = ensure_series(df['Volume'])
+        if len(close) < 6: return None
+        
+        recent_high = high.iloc[-6:-1].max(); recent_low = low.iloc[-6:-1].min()
+        last_high = high.iloc[-1]; last_low = low.iloc[-1]; last_close = close.iloc[-1]
+        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume)>=20 else volume.mean()
+        
+        if last_high > recent_high * 1.002 and last_close < recent_high and volume.iloc[-1] > vol_avg*1.2:
+            return "PE"
+        if last_low < recent_low * 0.998 and last_close > recent_low and volume.iloc[-1] > vol_avg*1.2:
+            return "CE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 5: INSTITUTIONAL CONTINUATION 🚨
+def detect_institutional_continuation(df):
+    try:
+        close = ensure_series(df['Close']); high = ensure_series(df['High']); 
+        low = ensure_series(df['Low']); volume = ensure_series(df['Volume'])
+        if len(close) < 10: return None
+        
+        atr = ta.volatility.AverageTrueRange(high, low, close, 14).average_true_range().iloc[-1]
+        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume)>=20 else volume.mean()
+        
+        speed = (close.iloc[-1] - close.iloc[-3]) / (abs(close.iloc[-3]) + 1e-6)
+        
+        if atr > close.std() * 0.8 and volume.iloc[-1] > vol_avg * 1.2 and speed > 0.004:
+            return "CE"
+        if atr > close.std() * 0.8 and volume.iloc[-1] > vol_avg * 1.2 and speed < -0.004:
+            return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 6: PULLBACK REVERSAL 🚨
+def detect_pullback_reversal(df):
+    try:
+        close = ensure_series(df['Close'])
+        ema9 = ta.trend.EMAIndicator(close, 9).ema_indicator()
+        ema21 = ta.trend.EMAIndicator(close, 21).ema_indicator()
+        rsi = ta.momentum.RSIIndicator(close, 14).rsi()
+
+        if len(close) < 6:
+            return None
+
+        if close.iloc[-6] > ema21.iloc[-6] and close.iloc[-3] <= ema21.iloc[-3] and close.iloc[-1] > ema9.iloc[-1] and rsi.iloc[-1] > 50:
+            return "CE"
+
+        if close.iloc[-6] < ema21.iloc[-6] and close.iloc[-3] >= ema21.iloc[-3] and close.iloc[-1] < ema9.iloc[-1] and rsi.iloc[-1] < 50:
+            return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 7: ORDERFLOW MIMIC LOGIC 🚨
+def mimic_orderflow_logic(df):
+    try:
+        close = ensure_series(df['Close']); high = ensure_series(df['High']); 
+        low = ensure_series(df['Low']); volume = ensure_series(df['Volume'])
+        rsi = ta.momentum.RSIIndicator(close, 14).rsi()
+
+        if len(close) < 4:
+            return None
+
+        body = (high - low).abs(); wick_top = (high - close).abs(); wick_bottom = (close - low).abs()
+        body_last = body.iloc[-1] if body.iloc[-1] != 0 else 1.0
+        wick_top_ratio = wick_top.iloc[-1] / body_last
+        wick_bottom_ratio = wick_bottom.iloc[-1] / body_last
+        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
+        vol_ratio = volume.iloc[-1] / (vol_avg if vol_avg and vol_avg > 0 else 1)
+
+        if close.iloc[-1] > close.iloc[-3] and rsi.iloc[-1] < rsi.iloc[-3] and wick_top_ratio > 0.6 and vol_ratio > 1.2:
+            return "PE"
+
+        if close.iloc[-1] < close.iloc[-3] and rsi.iloc[-1] > rsi.iloc[-3] and wick_bottom_ratio > 0.6 and vol_ratio > 1.2:
+            return "CE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 8: VCP (Volatility Contraction Pattern) 🚨
+def detect_vcp_pattern(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        volume = ensure_series(df['Volume'])
+        
+        if len(close) < 10:
+            return None
+            
+        atr = ta.volatility.AverageTrueRange(high, low, close, 5).average_true_range()
+        
+        recent_atr = atr.iloc[-1]
+        prev_atr = atr.iloc[-5]
+        
+        recent_vol = volume.iloc[-5:].mean()
+        prev_vol = volume.iloc[-10:-5].mean()
+        
+        if (recent_atr < prev_atr * VCP_CONTRACTION_RATIO and 
+            recent_vol < prev_vol and
+            close.iloc[-1] > close.iloc[-5]):
+            return "CE"
+        elif (recent_atr < prev_atr * VCP_CONTRACTION_RATIO and 
+              recent_vol < prev_vol and
+              close.iloc[-1] < close.iloc[-5]):
+            return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 9: FAULTY BASES 🚨
+def detect_faulty_bases(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        volume = ensure_series(df['Volume'])
+        
+        if len(close) < 8:
+            return None
+            
+        recent_high = high.iloc[-8:-3].max()
+        recent_low = low.iloc[-8:-3].min()
+        current_close = close.iloc[-1]
+        
+        if (high.iloc[-4] > recent_high * (1 + FAULTY_BASE_BREAK_THRESHOLD/100) and
+            current_close < recent_high and
+            volume.iloc[-4] > volume.iloc[-5:].mean()):
+            return "PE"
+            
+        if (low.iloc[-4] < recent_low * (1 - FAULTY_BASE_BREAK_THRESHOLD/100) and
+            current_close > recent_low and
+            volume.iloc[-4] > volume.iloc[-5:].mean()):
+            return "CE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 10: WYCKOFF SCHEMATICS 🚨
+def detect_wyckoff_schematic(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        volume = ensure_series(df['Volume'])
+        
+        if len(close) < 15:
+            return None
+            
+        spring_low = low.iloc[-5]
+        support_level = low.iloc[-10:-5].min()
+        spring_volume = volume.iloc[-5]
+        avg_volume = volume.iloc[-10:].mean()
+        
+        if (spring_low < support_level * 0.995 and
+            close.iloc[-1] > support_level and
+            spring_volume > avg_volume * WYCKOFF_VOLUME_SPRING):
+            return "CE"
+            
+        upthrust_high = high.iloc[-5]
+        resistance_level = high.iloc[-10:-5].max()
+        upthrust_volume = volume.iloc[-5]
+        
+        if (upthrust_high > resistance_level * 1.005 and
+            close.iloc[-1] < resistance_level and
+            upthrust_volume > avg_volume * WYCKOFF_VOLUME_SPRING):
+            return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 11: LIQUIDITY SWEEPS 🚨
+def detect_liquidity_sweeps(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        volume = ensure_series(df['Volume'])
+        
+        if len(close) < 10:
+            return None
+            
+        recent_highs = high.iloc[-10:-2]
+        recent_lows = low.iloc[-10:-2]
+        
+        liquidity_high = recent_highs.max()
+        liquidity_low = recent_lows.min()
+        
+        current_high = high.iloc[-1]
+        current_low = low.iloc[-1]
+        current_close = close.iloc[-1]
+        
+        if (current_high > liquidity_high * (1 + LIQUIDITY_SWEEP_DISTANCE) and
+            current_close < liquidity_high and
+            volume.iloc[-1] > volume.iloc[-10:-1].mean()):
+            return "PE"
+            
+        if (current_low < liquidity_low * (1 - LIQUIDITY_SWEEP_DISTANCE) and
+            current_close > liquidity_low and
+            volume.iloc[-1] > volume.iloc[-10:-1].mean()):
+            return "CE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 12: PEAK REJECTION 🚨
+def detect_peak_rejection(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        volume = ensure_series(df['Volume'])
+        
+        if len(close) < 5:
+            return None
+            
+        current_high = high.iloc[-1]
+        current_low = low.iloc[-1]
+        current_close = close.iloc[-1]
+        
+        body_size = abs(current_close - close.iloc[-2])
+        upper_wick = current_high - max(close.iloc[-1], close.iloc[-2])
+        lower_wick = min(close.iloc[-1], close.iloc[-2]) - current_low
+        
+        if (upper_wick > body_size * PEAK_REJECTION_WICK_RATIO and
+            current_close < (current_high + current_low) / 2):
+            return "PE"
+            
+        if (lower_wick > body_size * PEAK_REJECTION_WICK_RATIO and
+            current_close > (current_high + current_low) / 2):
+            return "CE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 13: FAIR VALUE GAP (FVG) 🚨
+def detect_fair_value_gap(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        
+        if len(close) < 3:
+            return None
+            
+        if (low.iloc[-1] > high.iloc[-2] * (1 + FVG_GAP_THRESHOLD) and
+            close.iloc[-1] > close.iloc[-2]):
+            return "CE"
+            
+        if (high.iloc[-1] < low.iloc[-2] * (1 - FVG_GAP_THRESHOLD) and
+            close.iloc[-1] < close.iloc[-2]):
+            return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 14: VOLUME GAP IMBALANCE 🚨
+def detect_volume_gap_imbalance(df):
+    try:
+        volume = ensure_series(df['Volume'])
+        close = ensure_series(df['Close'])
+        
+        if len(volume) < 20:
+            return None
+            
+        current_volume = volume.iloc[-1]
+        avg_volume = volume.iloc[-20:].mean()
+        price_change = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]
+        
+        if (current_volume > avg_volume * VOLUME_GAP_IMBALANCE and
+            abs(price_change) > 0.002):
+            if price_change > 0:
+                return "CE"
+            else:
+                return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 15: OTE (Optimal Trade Entry) 🚨
+def detect_ote_retracement(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        
+        if len(close) < 15:
+            return None
+            
+        swing_high = high.iloc[-15:-5].max()
+        swing_low = low.iloc[-15:-5].min()
+        swing_range = swing_high - swing_low
+        
+        current_price = close.iloc[-1]
+        
+        for level in OTE_RETRACEMENT_LEVELS:
+            ote_level = swing_high - (swing_range * level)
+            
+            if (abs(current_price - ote_level) / ote_level < 0.002 and
+                close.iloc[-1] > close.iloc[-2]):
+                return "CE"
+                
+            ote_level = swing_low + (swing_range * level)
+            if (abs(current_price - ote_level) / ote_level < 0.002 and
+                close.iloc[-1] < close.iloc[-2]):
+                return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 16: DEMAND AND SUPPLY ZONES 🚨
+def detect_demand_supply_zones(df):
+    try:
+        high = ensure_series(df['High'])
+        low = ensure_series(df['Low'])
+        close = ensure_series(df['Close'])
+        volume = ensure_series(df['Volume'])
+        
+        if len(close) < DEMAND_SUPPLY_ZONE_LOOKBACK + 5:
+            return None
+            
+        lookback = DEMAND_SUPPLY_ZONE_LOOKBACK
+        
+        demand_lows = low.rolling(3, center=True).min().dropna()
+        significant_demand = demand_lows[demand_lows == demand_lows.rolling(5).min()]
+        
+        supply_highs = high.rolling(3, center=True).max().dropna()
+        significant_supply = supply_highs[supply_highs == supply_highs.rolling(5).max()]
+        
+        current_price = close.iloc[-1]
+        
+        for zone in significant_demand.iloc[-5:]:
+            if (abs(current_price - zone) / zone < 0.003 and
+                close.iloc[-1] > close.iloc[-2] and
+                volume.iloc[-1] > volume.iloc[-5:].mean()):
+                return "CE"
+                
+        for zone in significant_supply.iloc[-5:]:
+            if (abs(current_price - zone) / zone < 0.003 and
+                close.iloc[-1] < close.iloc[-2] and
+                volume.iloc[-1] > volume.iloc[-5:].mean()):
+                return "PE"
+    except Exception:
+        return None
+    return None
+
+# 🚨 LAYER 17: BOTTOM-FISHING 🚨
 def detect_bottom_fishing(index, df):
-    """
-    Detects potential institutional bottom-fishing entry.
-    Only triggers if price reacts off support zones / absorption patterns.
-    Returns "CE" or "PE" or None.
-    """
     try:
         close = ensure_series(df['Close'])
         low = ensure_series(df['Low'])
@@ -278,23 +706,19 @@ def detect_bottom_fishing(index, df):
         if len(close) < 6: 
             return None
 
-        # Identify bull liquidity zones
         bull_liq, bear_liq = institutional_liquidity_hunt(index, df)
         last_close = float(close.iloc[-1])
 
-        # Detect absorption: long lower wick + recovery + volume divergence
         wick = last_close - low.iloc[-1]
         body = abs(close.iloc[-1] - close.iloc[-2])
         vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
         vol_ratio = volume.iloc[-1] / (vol_avg if vol_avg > 0 else 1)
 
-        # Oversold absorption criteria
         if wick > body * 1.5 and vol_ratio > 1.2:
-            # check near bull liquidity
             for zone in bull_liq:
                 if abs(last_close - zone) <= 5:
                     return "CE"
-        # Mirror logic for distribution at top
+
         bear_wick = high.iloc[-1] - last_close
         if bear_wick > body * 1.5 and vol_ratio > 1.2:
             for zone in bear_liq:
@@ -304,38 +728,8 @@ def detect_bottom_fishing(index, df):
         return None
     return None
 
-# --------- NEW INSTITUTIONAL LAYERS (PULLBACK / TRAP / ORDERFLOW-MIMIC) ---------
-def detect_pullback_reversal(df):
-    """
-    Detects pullback to EMA21 or EMA9 and a reversal candle indicating institutional reload.
-    Returns "CE" or "PE" or None.
-    """
-    try:
-        close = ensure_series(df['Close'])
-        ema9 = ta.trend.EMAIndicator(close, 9).ema_indicator()
-        ema21 = ta.trend.EMAIndicator(close, 21).ema_indicator()
-        rsi = ta.momentum.RSIIndicator(close, 14).rsi()
-
-        # ensure enough history
-        if len(close) < 6:
-            return None
-
-        # uptrend pullback then bounce
-        if close.iloc[-6] > ema21.iloc[-6] and close.iloc[-3] <= ema21.iloc[-3] and close.iloc[-1] > ema9.iloc[-1] and rsi.iloc[-1] > 50:
-            return "CE"
-
-        # downtrend pullback then drop
-        if close.iloc[-6] < ema21.iloc[-6] and close.iloc[-3] >= ema21.iloc[-3] and close.iloc[-1] < ema9.iloc[-1] and rsi.iloc[-1] < 50:
-            return "PE"
-    except Exception:
-        return None
-    return None
-
+# 🚨 LAYER 18: INSTITUTIONAL TRAP 🚨
 def detect_institutional_trap(df, lookback=10):
-    """
-    Detects fake breakout / trap: strong wick beyond recent high/low with high volume and closing back.
-    Returns "PE" if upside trap (short), "CE" if downside trap (long), else None.
-    """
     try:
         high = ensure_series(df['High'])
         low = ensure_series(df['Low'])
@@ -347,201 +741,167 @@ def detect_institutional_trap(df, lookback=10):
         recent_low = low.rolling(lookback).min().iloc[-2]
         avg_vol = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
 
-        # Upward fake breakout trap: wick above recent high then close below recent high on high volume
         if high.iloc[-1] > recent_high and close.iloc[-1] < recent_high and (avg_vol is None or volume.iloc[-1] > (avg_vol * 1.2)):
             return "PE"
 
-        # Downward fake breakdown trap
         if low.iloc[-1] < recent_low and close.iloc[-1] > recent_low and (avg_vol is None or volume.iloc[-1] > (avg_vol * 1.2)):
             return "CE"
     except Exception:
         return None
     return None
 
-def mimic_orderflow_logic(df):
-    """
-    Mimic orderflow using wick ratios, volume spikes, and RSI divergence.
-    Returns "CE" or "PE" or None.
-    """
-    try:
-        close = ensure_series(df['Close'])
-        high = ensure_series(df['High'])
-        low = ensure_series(df['Low'])
-        volume = ensure_series(df['Volume'])
-        rsi = ta.momentum.RSIIndicator(close, 14).rsi()
-
-        if len(close) < 4:
-            return None
-
-        body = (high - low).abs()
-        wick_top = (high - close).abs()
-        wick_bottom = (close - low).abs()
-
-        body_last = body.iloc[-1] if body.iloc[-1] != 0 else 1.0
-        wick_top_ratio = wick_top.iloc[-1] / body_last
-        wick_bottom_ratio = wick_bottom.iloc[-1] / body_last
-
-        vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
-        vol_ratio = volume.iloc[-1] / (vol_avg if vol_avg and vol_avg > 0 else 1)
-
-        # Distribution: price up slightly, RSI falling, large upper wick and rising volume
-        if close.iloc[-1] > close.iloc[-3] and rsi.iloc[-1] < rsi.iloc[-3] and wick_top_ratio > 0.6 and vol_ratio > 1.2:
-            return "PE"
-
-        # Accumulation: price down slightly, RSI rising, large lower wick and rising volume
-        if close.iloc[-1] < close.iloc[-3] and rsi.iloc[-1] > rsi.iloc[-3] and wick_bottom_ratio > 0.6 and vol_ratio > 1.2:
-            return "CE"
-    except Exception:
-        return None
-    return None
-
-# --------- STRATEGY CHECK ---------
+# --------- UPDATED STRATEGY CHECK WITH ALL LAYERS ---------
 def analyze_index_signal(index):
-    df5=fetch_index_data(index,"5m","2d")
-    df15=fetch_index_data(index,"15m","10d")
-    if df5 is None or df15 is None:
+    df5 = fetch_index_data(index, "5m", "2d")
+    if df5 is None:
         return None
 
-    close5=ensure_series(df5["Close"])
-    close15=ensure_series(df15["Close"])
-
-    # guard - ensure we have enough data and non-NaN
-    if len(close5) < 6 or len(close15) < 2:
-        return None
-    if close5.isna().iloc[-1] or close5.isna().iloc[-2]:
+    close5 = ensure_series(df5["Close"])
+    if len(close5) < 20 or close5.isna().iloc[-1] or close5.isna().iloc[-2]:
         return None
 
-    last_close=float(close5.iloc[-1])
-    prev_close=float(close5.iloc[-2])
+    last_close = float(close5.iloc[-1])
+    prev_close = float(close5.iloc[-2])
 
-    # 🚨 1️⃣ BOTTOM-FISHING HIGH-PRIORITY LAYER (NEW)
-    bottom_sig = detect_bottom_fishing(index, df5)
-    if bottom_sig:
-        return bottom_sig, df5, False
-
-    # EMA/RSI indicators
-    ema9_5=float(ta.trend.EMAIndicator(close5,9).ema_indicator().iloc[-1])
-    ema21_5=float(ta.trend.EMAIndicator(close5,21).ema_indicator().iloc[-1])
-    rsi5=float(ta.momentum.RSIIndicator(close5,14).rsi().iloc[-1])
-
-    vol5 = ensure_series(df5["Volume"])
-    vol_latest=float(vol5.iloc[-1])
-    vol_avg=float(vol5.rolling(20).mean().iloc[-1]) if len(vol5)>=20 else float(vol5.mean())
-    # Loosened volume gate: allow some lower-vol cases but still block dead bars
-    if vol_latest < (vol_avg * 0.8):
-        # allow if strong breakout or orderflow indicates institutional action (handled below)
-        pass
-
-    ema9_15=float(ta.trend.EMAIndicator(close15,9).ema_indicator().iloc[-1])
-    ema21_15=float(ta.trend.EMAIndicator(close15,21).ema_indicator().iloc[-1])
-    rsi15=float(ta.momentum.RSIIndicator(close15,14).rsi().iloc[-1])
-
-    # guard against NaN values
-    if math.isnan(last_close) or math.isnan(prev_close):
-        return None
-
-    # Relaxed multi-timeframe logic (less strict)
-    bullish = (
-        (ema9_5 > ema21_5 and rsi5 > 50 and last_close > prev_close)
-        or (ema9_15 > ema21_15 and rsi15 > 51)
-    )
-    bearish = (
-        (ema9_5 < ema21_5 and rsi5 < 50 and last_close < prev_close)
-        or (ema9_15 < ema21_15 and rsi15 < 49)
-    )
-
-    # Opening range bias (mild) - boost early signals
+    # 🚨 LAYER 0: OPENING-PLAY PRIORITY 🚨
     try:
         utc_now = datetime.utcnow()
         ist_now = utc_now + timedelta(hours=5, minutes=30)
         t = ist_now.time()
-        opening_range_bias = dtime(9,15) <= t <= dtime(9,45)
+        opening_range_bias = OPENING_PLAY_ENABLED and (OPENING_START <= t <= OPENING_END)
         if opening_range_bias:
-            if last_close > close5.iloc[-5:].mean():
-                bullish = True
-            elif last_close < close5.iloc[-5:].mean():
-                bearish = True
+            op_sig = institutional_opening_play(index, df5)
+            if op_sig:
+                fakeout = False
+                high_zone, low_zone = detect_liquidity_zone(df5, lookback=10)
+                try:
+                    if op_sig == "CE" and last_close >= high_zone: fakeout = True
+                    if op_sig == "PE" and last_close <= low_zone: fakeout = True
+                except:
+                    fakeout = False
+                return op_sig, df5, fakeout
     except Exception:
         pass
 
-    # 2️⃣ Detect pullback reversal, traps, and orderflow mimics (priority)
+    # 🚨 LAYER 1: EXPIRY / GAMMA DETECTION 🚨
     try:
-        trap_sig = detect_institutional_trap(df5)
-        if trap_sig:
-            # mark fakeout true because it's a trap (opposite of breakout)
-            return trap_sig, df5, True
-    except:
-        trap_sig = None
-
-    try:
-        pull_sig = detect_pullback_reversal(df5)
-        if pull_sig:
-            return pull_sig, df5, False
-    except:
-        pull_sig = None
-
-    try:
-        flow_sig = mimic_orderflow_logic(df5)
-        if flow_sig:
-            return flow_sig, df5, False
-    except:
-        flow_sig = None
-
-    # --- Breakout & Failed Breakout Detection (quick addition) ---
-    try:
-        recent_high = df5["High"].iloc[-6:].max()
-        recent_low = df5["Low"].iloc[-6:].min()
-        # breakout above recent high
-        if last_close > recent_high:
-            bullish = True
-        elif last_close < recent_low:
-            bearish = True
-        # failed breakout fade
-        if df5["High"].iloc[-1] > recent_high and df5["Close"].iloc[-1] < recent_high:
-            bearish = True
-        if df5["Low"].iloc[-1] < recent_low and df5["Close"].iloc[-1] > recent_low:
-            bullish = True
+        gamma = detect_gamma_squeeze(index, df5)
+        if gamma:
+            gamma_msg = f"⚡ GAMMA-LIKE EVENT DETECTED: {index} {gamma['side']} (conf {gamma['confidence']:.2f})"
+            send_telegram(gamma_msg)
+            if is_expiry_day_for_index(index) and EXPIRY_ACTIONABLE and not EXPIRY_INFO_ONLY:
+                cand = gamma['side']
+                oi_flow = oi_delta_flow_signal(index)
+                if institutional_flow_confirm(index, cand, df5):
+                    return cand, df5, False
+                if gamma['confidence'] > 0.45 and oi_flow == cand:
+                    return cand, df5, False
     except Exception:
         pass
 
-    high_zone, low_zone = detect_liquidity_zone(df5, lookback=15)
+    # 🚨 LAYER 2: LIQUIDITY SWEEPS (Highest Priority) 🚨
+    sweep_sig = detect_liquidity_sweeps(df5)
+    if sweep_sig:
+        return sweep_sig, df5, True
 
-    fakeout=False
-    try:
-        if bullish and last_close<high_zone: fakeout=True
-        if bearish and last_close>low_zone: fakeout=True
-    except:
-        fakeout=False
+    # 🚨 LAYER 3: WYCKOFF SCHEMATICS 🚨
+    wyckoff_sig = detect_wyckoff_schematic(df5)
+    if wyckoff_sig:
+        return wyckoff_sig, df5, False
 
-    # ✅ 3️⃣ Integrate Liquidity Hunt Layer (existing)
+    # 🚨 LAYER 4: VCP PATTERN 🚨
+    vcp_sig = detect_vcp_pattern(df5)
+    if vcp_sig:
+        return vcp_sig, df5, False
+
+    # 🚨 LAYER 5: FAULTY BASES 🚨
+    faulty_sig = detect_faulty_bases(df5)
+    if faulty_sig:
+        return faulty_sig, df5, True
+
+    # 🚨 LAYER 6: PEAK REJECTION 🚨
+    peak_sig = detect_peak_rejection(df5)
+    if peak_sig:
+        return peak_sig, df5, True
+
+    # 🚨 LAYER 7: SMART-MONEY DIVERGENCE 🚨
+    sm_sig = smart_money_divergence(df5)
+    if sm_sig:
+        return sm_sig, df5, False
+
+    # 🚨 LAYER 8: STOP-HUNT DETECTOR 🚨
+    stop_sig = detect_stop_hunt(df5)
+    if stop_sig:
+        return stop_sig, df5, True
+
+    # 🚨 LAYER 9: INSTITUTIONAL CONTINUATION 🚨
+    cont_sig = detect_institutional_continuation(df5)
+    if cont_sig:
+        if institutional_flow_confirm(index, cont_sig, df5):
+            return cont_sig, df5, False
+
+    # 🚨 LAYER 10: FAIR VALUE GAP 🚨
+    fvg_sig = detect_fair_value_gap(df5)
+    if fvg_sig:
+        return fvg_sig, df5, False
+
+    # 🚨 LAYER 11: VOLUME GAP IMBALANCE 🚨
+    volume_sig = detect_volume_gap_imbalance(df5)
+    if volume_sig:
+        return volume_sig, df5, False
+
+    # 🚨 LAYER 12: OTE RETRACEMENT 🚨
+    ote_sig = detect_ote_retracement(df5)
+    if ote_sig:
+        return ote_sig, df5, False
+
+    # 🚨 LAYER 13: DEMAND & SUPPLY ZONES 🚨
+    ds_sig = detect_demand_supply_zones(df5)
+    if ds_sig:
+        return ds_sig, df5, False
+
+    # 🚨 LAYER 14: PULLBACK REVERSAL 🚨
+    pull_sig = detect_pullback_reversal(df5)
+    if pull_sig:
+        return pull_sig, df5, False
+
+    # 🚨 LAYER 15: ORDERFLOW MIMIC 🚨
+    flow_sig = mimic_orderflow_logic(df5)
+    if flow_sig:
+        return flow_sig, df5, False
+
+    # 🚨 LAYER 16: BOTTOM-FISHING 🚨
+    bottom_sig = detect_bottom_fishing(index, df5)
+    if bottom_sig:
+        return bottom_sig, df5, False
+
+    # 🚨 LAYER 17: INSTITUTIONAL TRAP 🚨
+    trap_sig = detect_institutional_trap(df5)
+    if trap_sig:
+        return trap_sig, df5, True
+
+    # Final fallback: Liquidity-based entry
     bull_liq, bear_liq = institutional_liquidity_hunt(index, df5)
     liquidity_side = liquidity_zone_entry_check(last_close, bull_liq, bear_liq)
     if liquidity_side:
-        return liquidity_side, df5, fakeout
+        return liquidity_side, df5, False
 
-    if bullish: return "CE",df5,fakeout
-    if bearish: return "PE",df5,fakeout
     return None
 
 # --------- SYMBOL FORMAT FOR ALL INDICES ---------
 def get_option_symbol(index, expiry_str, strike, opttype):
     dt=datetime.strptime(expiry_str,"%d %b %Y")
     
-    # CORRECTED: Each index maintains its own symbol format
     if index == "SENSEX":
-        # SENSEX format: SENSEX + YY + MONTH_CODE + STRIKE + OPTION_TYPE
         year_short = dt.strftime("%y")
         month_code = dt.strftime("%b").upper()
         day = dt.strftime("%d")
         return f"SENSEX{year_short}{month_code}{strike}{opttype}"
     elif index == "FINNIFTY":
-        # FINNIFTY format: FINNIFTY + DDMMMYY + STRIKE + OPTION_TYPE
         return f"FINNIFTY{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
     elif index == "MIDCPNIFTY":
-        # MIDCPNIFTY format: MIDCPNIFTY + DDMMMYY + STRIKE + OPTION_TYPE  
         return f"MIDCPNIFTY{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
     else:
-        # Standard format for NIFTY, BANKNIFTY, and stocks
         return f"{index}{dt.strftime('%d%b%y').upper()}{strike}{opttype}"
 
 # --------- INSTITUTIONAL FLOW CHECKS ---------
@@ -562,6 +922,7 @@ def institutional_flow_signal(index, df5):
         return "CE"
     elif last_close<prev_close and vol_latest>vol_avg:
         return "PE"
+    
     high_zone, low_zone = detect_liquidity_zone(df5, lookback=15)
     try:
         if last_close>=high_zone: return "PE"
@@ -575,87 +936,37 @@ def oi_delta_flow_signal(index):
     try:
         url=f"https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         df=pd.DataFrame(requests.get(url,timeout=10).json())
-        # Include both exchanges
         df=df[df['exch_seg'].str.upper().isin(["NFO", "BFO"])]
         df['symbol']=df['symbol'].str.upper()
         df_index=df[df['symbol'].str.contains(index)]
-        # ensure 'oi' exists and convertible
         if 'oi' not in df_index.columns:
             return None
         df_index['oi'] = pd.to_numeric(df_index['oi'], errors='coerce').fillna(0)
         df_index['oi_change'] = df_index['oi'].diff().fillna(0)
         ce_sum = df_index[df_index['symbol'].str.endswith("CE")]['oi_change'].sum()
         pe_sum = df_index[df_index['symbol'].str.endswith("PE")]['oi_change'].sum()
-        if ce_sum>pe_sum*1.5: return "CE"
-        if pe_sum>ce_sum*1.5: return "PE"
+        if ce_sum>pe_sum*DELTA_OI_RATIO: return "CE"
+        if pe_sum>ce_sum*DELTA_OI_RATIO: return "PE"
         if ce_sum>0 and pe_sum>0: return "BOTH"
     except:
         return None
 
-# --------- NEW INSTITUTIONAL CONFIRMATION LAYER (updated to use pullback/trap) ---------
+# --------- SIMPLIFIED CONFIRMATION ---------
 def institutional_confirmation_layer(index, df5, base_signal):
-    close = ensure_series(df5['Close'])
-    high = ensure_series(df5['High'])
-    low = ensure_series(df5['Low'])
-    volume = ensure_series(df5['Volume'])
-    atr = ta.volatility.AverageTrueRange(high, low, close, 14).average_true_range().iloc[-1]
-
-    last_close = float(close.iloc[-1])
-    prev_close = float(close.iloc[-2])
-    body_strength = abs(last_close - (high.iloc[-1]+low.iloc[-1])/2)
-
-    # Liquidity trap: avoid if candle wicks through prev high/low zone
-    high_zone, low_zone = detect_liquidity_zone(df5, lookback=20)
-    if base_signal == 'CE' and last_close >= high_zone:
-        return False
-    if base_signal == 'PE' and last_close <= low_zone:
-        return False
-
-    # Weak momentum: skip if candle body small or low volume
-    vol_avg = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else volume.mean()
-    if volume.iloc[-1] < vol_avg or body_strength < atr*0.25:
-        return False
-
-    # Volatility dead zone: skip low ATR periods
-    if atr < (close.std() * 0.25):
-        return False
-
-    # Breadth check: ensure coherence across major index pairs
-    if index == 'NIFTY':
-        b_df = fetch_index_data('BANKNIFTY', '5m', '2d')
-    elif index == 'BANKNIFTY':
-        b_df = fetch_index_data('NIFTY', '5m', '2d')
-    else:
-        b_df = None
-
-    if b_df is not None:
-        b_close = ensure_series(b_df['Close'])
-        b_ema9 = ta.trend.EMAIndicator(b_close, 9).ema_indicator().iloc[-1]
-        b_ema21 = ta.trend.EMAIndicator(b_close, 21).ema_indicator().iloc[-1]
-        if base_signal == 'PE' and b_ema9 > b_ema21:
-            return False
-        if base_signal == 'CE' and b_ema9 < b_ema21:
-            return False
-
-    # Additional institutional confirmation: if pullback reversal aligns with base_signal, allow
     try:
-        pull_sig = detect_pullback_reversal(df5)
-        if pull_sig and pull_sig == base_signal:
-            return True
-    except:
-        pass
-
-    # If trap detected and is opposite of base_signal, deny
-    try:
-        trap_sig = detect_institutional_trap(df5)
-        if trap_sig and trap_sig != base_signal:
+        close = ensure_series(df5['Close'])
+        last_close = float(close.iloc[-1])
+        
+        high_zone, low_zone = detect_liquidity_zone(df5, lookback=20)
+        if base_signal == 'CE' and last_close >= high_zone:
             return False
-    except:
-        pass
+        if base_signal == 'PE' and last_close <= low_zone:
+            return False
 
-    return True
+        return True
+    except Exception:
+        return False
 
-# --------- FLOW CONFIRMATION LAYER (UPDATED) ---------
 def institutional_flow_confirm(index, base_signal, df5):
     flow = institutional_flow_signal(index, df5)
     oi_flow = oi_delta_flow_signal(index)
@@ -665,7 +976,6 @@ def institutional_flow_confirm(index, base_signal, df5):
     if oi_flow and oi_flow != 'BOTH' and oi_flow != base_signal:
         return False
 
-    # ✅ NEW: Institutional Confirmation Add-On (uses pullback/trap/orderflow)
     if not institutional_confirmation_layer(index, df5, base_signal):
         return False
 
@@ -676,20 +986,17 @@ def monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id):
     last_high = entry
     weakness_sent = False
     in_trade=False
-    # Ensure active_trades entry exists and mark status OPEN
     for idx, val in active_trades.items():
         if val and val.get("symbol") == symbol:
             active_trades[idx]["status"] = "OPEN"
             break
 
     while True:
-        # Auto stop at 3:30 PM IST
         if should_stop_trading():
             global STOP_SENT
             if not STOP_SENT:
                 send_telegram(f"🛑 Market closed - Stopping monitoring for {symbol}", reply_to=thread_id)
                 STOP_SENT = True
-            # mark closed if was open
             for idx, val in active_trades.items():
                 if val and val.get("symbol") == symbol:
                     active_trades[idx]["status"] = "CLOSED"
@@ -712,14 +1019,12 @@ def monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id):
                 weakness_sent=True
             if price>=targets[0]:
                 send_telegram(f"🌟 {symbol}: First Target {targets[0]} hit", reply_to=thread_id)
-                # mark closed
                 for idx, val in active_trades.items():
                     if val and val.get("symbol") == symbol:
                         active_trades[idx]["status"] = "CLOSED"
                 break
             if price<=sl:
                 send_telegram(f"🔗 {symbol}: Stop Loss {sl} hit. Exit trade.", reply_to=thread_id)
-                # mark closed
                 for idx, val in active_trades.items():
                     if val and val.get("symbol") == symbol:
                         active_trades[idx]["status"] = "CLOSED"
@@ -728,10 +1033,10 @@ def monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id):
 
 # --------- EXPIRY CONFIG FOR ALL INDICES ---------
 EXPIRIES = {
-    "NIFTY": "14 OCT 2025",
+    "NIFTY": "20 OCT 2025",
     "BANKNIFTY": "28 OCT 2025", 
-    "SENSEX": "16 OCT 2025",
-    "FINNIFTY": "28 OCT 2025",  # CORRECTED: FINNIFTY has its own expiry
+    "SENSEX": "23 OCT 2025",
+    "FINNIFTY": "28 OCT 2025",
     "MIDCPNIFTY": "28 OCT 2025",
     "EICHERMOT": "28 OCT 2025",
     "TRENT": "28 OCT 2025", 
@@ -748,14 +1053,12 @@ active_trades = {
 # --------- THREAD FUNCTION ---------
 def trade_thread(index):
     global active_trades
-    # allow re-entry if last trade closed; only block if an open trade exists
     if active_trades[index] and isinstance(active_trades[index], dict) and active_trades[index].get("status") == "OPEN":
         return
 
     sig=analyze_index_signal(index)
     side=None; fakeout=False; df=None
     if sig: 
-        # analyze_index_signal may return a 2-tuple or 3-tuple (we keep compatibility)
         if isinstance(sig, tuple) and len(sig) == 3:
             side, df, fakeout = sig
         elif isinstance(sig, tuple) and len(sig) == 2:
@@ -785,15 +1088,12 @@ def trade_thread(index):
 def send_signal(index,side,df,fakeout):
     ltp=float(ensure_series(df["Close"]).iloc[-1])
     
-    # CORRECTED: Each index uses its own strike rounding
     strike=round_strike(index,ltp)
     
     if strike is None:
-        # cannot determine strike because LTP missing or invalid
         send_telegram(f"⚠️ {index}: could not determine strike (ltp missing). Signal skipped.")
         return
         
-    # CORRECTED: Each index uses its own symbol format  
     symbol=get_option_symbol(index,EXPIRIES[index],strike,side)
     
     price=fetch_option_price(symbol)
@@ -814,10 +1114,8 @@ def send_signal(index,side,df,fakeout):
          f"⚡ Fakeout: {'YES' if fakeout else 'NO'}")
          
     thread_id=send_telegram(msg)
-    # mark active trade with status OPEN
     active_trades[index]={"symbol":symbol,"entry":entry,"sl":sl,"targets":targets,"thread":thread_id,"status":"OPEN"}
     monitor_price_live(symbol,entry,targets,sl,fakeout,thread_id)
-    # once monitor returns, ensure status is CLOSED (monitor_price_live will set it on exit)
     active_trades[index]=None
 
 # --------- MAIN LOOP (ALL INDICES PARALLEL) ---------
@@ -831,7 +1129,7 @@ def run_algo_parallel():
         if not STOP_SENT:
             send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
             STOP_SENT = True
-        exit(0)
+        return
         
     threads=[]
     all_indices = ["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY", "EICHERMOT", "TRENT", "RELIANCE"]
@@ -843,21 +1141,18 @@ def run_algo_parallel():
     for t in threads: t.join()
 
 # --------- START ---------
-# Send startup once - MOVE INSIDE LOOP
 while True:
     try:
-        # Send startup message once per session
         if not STARTED_SENT and is_market_open():
-            send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running in Parallel with Institutional Layers!")
+            send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running with 18 Institutional Layers!")
             STARTED_SENT = True
-            STOP_SENT = False  # Reset stop flag for new session
+            STOP_SENT = False
             
-        # Auto stop at 3:30 PM IST
         if should_stop_trading():
             if not STOP_SENT:
                 send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
                 STOP_SENT = True
-                STARTED_SENT = False  # Reset for next day
+                STARTED_SENT = False
             break
             
         if is_market_open():
@@ -867,3 +1162,6 @@ while True:
     except Exception as e:
         send_telegram(f"⚠️ Error in main loop: {e}")
         time.sleep(60)
+
+
+
