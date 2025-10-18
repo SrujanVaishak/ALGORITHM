@@ -26,12 +26,6 @@ GAMMA_VOL_SPIKE_THRESHOLD = 2.0
 DELTA_OI_RATIO = 2.0
 MOMENTUM_VOL_AMPLIFIER = 1.5
 
-# 🚨 INSTITUTIONAL SIGNAL RELIABILITY CONFIG
-MIN_EMA_SPREAD = 15  # Minimum points difference for valid EMA crossover
-VOLUME_CONFIRMATION_RATIO = 1.5  # Volume must be 1.5x average
-PRICE_MOMENTUM_THRESHOLD = 0.002  # 0.2% minimum price movement
-INSTITUTIONAL_FLOW_CONFIRMATION = True
-
 # STRONGER CONFIRMATION THRESHOLDS
 VCP_CONTRACTION_RATIO = 0.6
 FAULTY_BASE_BREAK_THRESHOLD = 0.25
@@ -266,51 +260,6 @@ def liquidity_zone_entry_check(price, bull_liq, bear_liq):
             return None
     return None
 
-# 🚨 NEW: INSTITUTIONAL EMA VALIDATION 🚨
-def validate_institutional_ema_signal(df):
-    """
-    Institutional-grade EMA validation to prevent false signals
-    """
-    try:
-        close = ensure_series(df['Close'])
-        volume = ensure_series(df['Volume'])
-        
-        if len(close) < 21:
-            return None
-            
-        # Calculate EMAs
-        ema_9 = ta.trend.EMAIndicator(close, 9).ema_indicator()
-        ema_15 = ta.trend.EMAIndicator(close, 21).ema_indicator()  # Using 21 instead of 15 for better trend
-        
-        current_ema_9 = ema_9.iloc[-1]
-        current_ema_15 = ema_15.iloc[-1]
-        
-        # Check EMA spread significance
-        ema_spread = abs(current_ema_9 - current_ema_15)
-        if ema_spread < MIN_EMA_SPREAD:
-            return None  # Insufficient spread - noise, not signal
-            
-        # Volume confirmation
-        vol_avg = volume.rolling(20).mean().iloc[-1]
-        current_volume = volume.iloc[-1]
-        if current_volume < vol_avg * VOLUME_CONFIRMATION_RATIO:
-            return None  # Insufficient volume confirmation
-            
-        # Price momentum confirmation
-        price_change = (close.iloc[-1] - close.iloc[-3]) / close.iloc[-3]
-        if abs(price_change) < PRICE_MOMENTUM_THRESHOLD:
-            return None  # Insufficient price movement
-            
-        # Generate signal only if all conditions met
-        if current_ema_9 > current_ema_15 and price_change > 0:
-            return "CE"
-        elif current_ema_9 < current_ema_15 and price_change < 0:
-            return "PE"
-            
-    except Exception as e:
-        return None
-    return None
-
 # 🚨 NEW: INSTITUTIONAL PRICE ACTION LAYER 🚨
 def institutional_price_action_signal(df):
     """
@@ -383,13 +332,6 @@ def institutional_momentum_confirmation(index, df, proposed_signal):
         
         if len(close) < 5:
             return False
-            
-        # Volume confirmation
-        vol_avg = volume.rolling(20).mean().iloc[-1]
-        current_vol = volume.iloc[-1]
-        
-        if current_vol < vol_avg * 1.3:
-            return False  # Insufficient institutional participation
             
         # Price momentum confirmation
         if proposed_signal == "CE":
@@ -955,12 +897,6 @@ def analyze_index_signal(index):
         if institutional_momentum_confirmation(index, df5, institutional_pa_signal):
             return institutional_pa_signal, df5, False
 
-    # 🚨 NEW: INSTITUTIONAL EMA VALIDATION 🚨
-    institutional_ema_signal = validate_institutional_ema_signal(df5)
-    if institutional_ema_signal:
-        if institutional_momentum_confirmation(index, df5, institutional_ema_signal):
-            return institutional_ema_signal, df5, False
-
     # 🚨 LAYER 0: OPENING-PLAY PRIORITY 🚨
     try:
         utc_now = datetime.utcnow()
@@ -1394,11 +1330,11 @@ def run_algo_parallel():
 while True:
     try:
         if not STARTED_SENT and is_market_open():
-            send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running with INSTITUTIONAL FIXES:\n"
-                         "✅ Institutional EMA Validation\n"  
-                         "✅ Price Action Signals\n"
-                         "✅ Volume & Momentum Confirmation\n"
-                         "✅ Removed False Trap Logic")
+            send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running with CLEAN FIXES:\n"
+                         "✅ Removed EMA Crossover Restrictions\n"  
+                         "✅ Removed Volume Thresholds\n"
+                         "✅ Pure Price Action Focus\n"
+                         "✅ Institutional Momentum Confirmation")
             STARTED_SENT = True
             STOP_SENT = False
             
