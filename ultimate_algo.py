@@ -1327,9 +1327,27 @@ def run_algo_parallel():
         t.join()
 
 # --------- START ---------
+# --------- START ---------
+MARKET_CLOSED_SENT = False  # Add this new variable
+
 while True:
     try:
-        if not STARTED_SENT and is_market_open():
+        # Check if market is open
+        market_open = is_market_open()
+        
+        # Market CLOSED behavior - send only ONE message
+        if not market_open:
+            if not MARKET_CLOSED_SENT and not STARTED_SENT:
+                send_telegram("🔴 Market is currently closed. Algorithm waiting for 9:15 AM...")
+                MARKET_CLOSED_SENT = True
+                STOP_SENT = False
+            
+            # Just sleep, don't send repeated messages
+            time.sleep(30)
+            continue
+        
+        # Market OPEN behavior - original logic
+        if not STARTED_SENT:
             send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running with CLEAN FIXES:\n"
                          "✅ Removed EMA Crossover Restrictions\n"  
                          "✅ Removed Volume Thresholds\n"
@@ -1337,6 +1355,7 @@ while True:
                          "✅ Institutional Momentum Confirmation")
             STARTED_SENT = True
             STOP_SENT = False
+            MARKET_CLOSED_SENT = False  # Reset for next day
             
         if should_stop_trading():
             if not STOP_SENT:
@@ -1345,10 +1364,10 @@ while True:
                 STARTED_SENT = False
             break
             
-        if is_market_open():
-            run_algo_parallel()
-            
+        # Run the main algorithm
+        run_algo_parallel()
         time.sleep(30)
+        
     except Exception as e:
         send_telegram(f"⚠️ Error in main loop: {e}")
         time.sleep(60)
