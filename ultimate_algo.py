@@ -37,6 +37,18 @@ VOLUME_GAP_IMBALANCE = 2.5
 OTE_RETRACEMENT_LEVELS = [0.618, 0.786]
 DEMAND_SUPPLY_ZONE_LOOKBACK = 20
 
+# --------- EXPIRIES FOR ALL INDICES ---------
+EXPIRIES = {
+    "NIFTY": "28 OCT 2025",
+    "BANKNIFTY": "28 OCT 2025",
+    "SENSEX": "30 OCT 2025",
+    "FINNIFTY": "28 OCT 2025",
+    "MIDCPNIFTY": "28 OCT 2025",
+    "EICHERMOT": "28 OCT 2025",
+    "TRENT": "28 OCT 2025",
+    "RELIANCE": "28 OCT 2025"
+}
+
 # --------- STRATEGY TRACKING ---------
 STRATEGY_NAMES = {
     "institutional_price_action": "INSTITUTIONAL PRICE ACTION",
@@ -399,17 +411,6 @@ def institutional_opening_play(index, df):
     return None
 
 # 🚨 LAYER 2: GAMMA SQUEEZE / EXPIRY LAYER 🚨
-EXPIRIES = {
-    "NIFTY": "20 OCT 2025",
-    "BANKNIFTY": "16 OCT 2025",
-    "SENSEX": "16 OCT 2025",
-    "FINNIFTY": "16 OCT 2025",
-    "MIDCPNIFTY": "16 OCT 2025",
-    "EICHERMOT": "31 OCT 2025",
-    "TRENT": "31 OCT 2025",
-    "RELIANCE": "28 OCT 2025"
-}
-
 def is_expiry_day_for_index(index):
     try:
         ex = EXPIRIES.get(index)
@@ -1262,22 +1263,45 @@ def calculate_pnl(entry, max_price, targets_hit, sl):
     avg_exit = sum(achieved_prices) / len(achieved_prices)
     return f"+{avg_exit - entry}"
 
-# --------- END OF DAY REPORT ---------
+# --------- NEW READABLE END OF DAY REPORT ---------
 def generate_end_of_day_report():
-    """Generate comprehensive end-of-day report"""
+    """Generate comprehensive end-of-day report in readable format"""
     if not daily_signals:
         return "📊 END OF DAY REPORT\nNo signals generated today."
     
     report = "📊 GIT ULTIMATE MASTER - END OF DAY REPORT\n\n"
-    report += "Timestamp | Index | Strike | Type | Strategy | Entry | T1 | T2 | T3 | T4 | SL | Fakeout | Index Price | Status | Targets | Max Price | 0 Targets? | No Highs? | P&L | ID\n"
-    report += "-" * 150 + "\n"
+    report += f"📅 Date: {datetime.now().strftime('%d-%b-%Y')}\n"
+    report += f"📈 Total Signals: {len(daily_signals)}\n"
+    report += "=" * 50 + "\n\n"
     
     total_pnl = 0
-    total_signals = len(daily_signals)
     successful_trades = 0
     
-    for signal in daily_signals:
-        # Calculate P&L numerically for summary
+    for i, signal in enumerate(daily_signals, 1):
+        report += f"🔰 SIGNAL #{i}\n"
+        report += f"   • Timestamp: {signal['timestamp']}\n"
+        report += f"   • Index: {signal['index']}\n"
+        report += f"   • Strike: {signal['strike']}\n"
+        report += f"   • Type: {signal['option_type']}\n"
+        report += f"   • Strategy: {signal['strategy']}\n"
+        report += f"   • Entry Price: ₹{signal['entry_price']}\n"
+        report += f"   • Target 1: ₹{signal['targets'][0]}\n"
+        report += f"   • Target 2: ₹{signal['targets'][1]}\n"
+        report += f"   • Target 3: ₹{signal['targets'][2]}\n"
+        report += f"   • Target 4: ₹{signal['targets'][3]}\n"
+        report += f"   • Stop Loss: ₹{signal['sl']}\n"
+        report += f"   • Fakeout: {signal['fakeout']}\n"
+        report += f"   • Index Price: {signal['index_price']}\n"
+        report += f"   • Entry Status: {signal.get('entry_status', 'PENDING')}\n"
+        report += f"   • Targets Hit: {signal.get('targets_hit', 0)}/4\n"
+        report += f"   • Max Price Reached: ₹{signal.get('max_price_reached', signal['entry_price'])}\n"
+        report += f"   • Zero Targets Hit: {'Yes' if signal.get('zero_targets', True) else 'No'}\n"
+        report += f"   • No New Highs: {'Yes' if signal.get('no_new_highs', True) else 'No'}\n"
+        report += f"   • Final P&L: {signal.get('final_pnl', '0')}\n"
+        report += f"   • Signal ID: {signal['signal_id']}\n"
+        report += "-" * 40 + "\n\n"
+        
+        # Calculate P&L for summary
         pnl_str = signal.get("final_pnl", "0")
         try:
             if pnl_str.startswith("+"):
@@ -1287,15 +1311,14 @@ def generate_end_of_day_report():
                 total_pnl -= float(pnl_str[1:])
         except:
             pass
-            
-        report += f"{signal['timestamp']} | {signal['index']} | {signal['strike']} | {signal['option_type']} | {signal['strategy']} | {signal['entry_price']} | {signal['targets'][0]} | {signal['targets'][1]} | {signal['targets'][2]} | {signal['targets'][3]} | {signal['sl']} | {signal['fakeout']} | {signal['index_price']} | {signal.get('entry_status', 'PENDING')} | {signal.get('targets_hit', 0)}/4 | {signal.get('max_price_reached', signal['entry_price'])} | {signal.get('zero_targets', True)} | {signal.get('no_new_highs', True)} | {pnl_str} | {signal['signal_id']}\n"
     
-    # Summary
-    report += f"\n📈 SUMMARY:\n"
-    report += f"Total Signals: {total_signals}\n"
-    report += f"Successful Trades: {successful_trades}\n"
-    report += f"Success Rate: {(successful_trades/total_signals)*100:.1f}%\n"
-    report += f"Total P&L: ₹{total_pnl:+.2f}\n"
+    # Summary Section
+    report += "📈 SUMMARY\n"
+    report += "=" * 30 + "\n"
+    report += f"• Total Signals: {len(daily_signals)}\n"
+    report += f"• Successful Trades: {successful_trades}\n"
+    report += f"• Success Rate: {(successful_trades/len(daily_signals))*100:.1f}%\n"
+    report += f"• Total P&L: ₹{total_pnl:+.2f}\n\n"
     
     # Strategy Performance
     strategy_stats = {}
@@ -1308,10 +1331,11 @@ def generate_end_of_day_report():
         if pnl.startswith("+"):
             strategy_stats[strat]['success'] += 1
     
-    report += f"\n🎯 STRATEGY PERFORMANCE:\n"
+    report += "🎯 STRATEGY PERFORMANCE\n"
+    report += "=" * 30 + "\n"
     for strat, stats in strategy_stats.items():
         success_rate = (stats['success']/stats['count'])*100 if stats['count'] > 0 else 0
-        report += f"{strat}: {stats['count']} signals, {success_rate:.1f}% success rate\n"
+        report += f"• {strat}: {stats['count']} signals, {success_rate:.1f}% success rate\n"
     
     return report
 
