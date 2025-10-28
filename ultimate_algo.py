@@ -75,6 +75,8 @@ STRATEGY_NAMES = {
 # Track all signals for end-of-day report
 daily_signals = []
 signal_counter = 0
+# 🚨 NEW: Track ALL generated signals immediately
+all_generated_signals = []
 
 # --------- ANGEL ONE LOGIN ---------
 API_KEY = os.getenv("API_KEY")
@@ -1263,45 +1265,75 @@ def calculate_pnl(entry, max_price, targets_hit, sl):
     avg_exit = sum(achieved_prices) / len(achieved_prices)
     return f"+{avg_exit - entry}"
 
-# --------- NEW READABLE END OF DAY REPORT ---------
-def generate_end_of_day_report():
-    """Generate comprehensive end-of-day report in readable format"""
-    if not daily_signals:
-        return "📊 END OF DAY REPORT\nNo signals generated today."
+# --------- NEW INDIVIDUAL SIGNAL REPORTING ---------
+def send_individual_signal_reports():
+    """Send each signal in separate detailed messages after market hours"""
+    # 🚨 CRITICAL FIX: Use BOTH daily_signals AND all_generated_signals
+    all_signals = daily_signals + all_generated_signals
     
-    report = "📊 GIT ULTIMATE MASTER - END OF DAY REPORT\n\n"
-    report += f"📅 Date: {datetime.now().strftime('%d-%b-%Y')}\n"
-    report += f"📈 Total Signals: {len(daily_signals)}\n"
-    report += "=" * 50 + "\n\n"
+    # Remove duplicates based on signal_id
+    seen_ids = set()
+    unique_signals = []
+    for signal in all_signals:
+        if signal['signal_id'] not in seen_ids:
+            seen_ids.add(signal['signal_id'])
+            unique_signals.append(signal)
     
+    if not unique_signals:
+        send_telegram("📊 END OF DAY REPORT\nNo signals generated today.")
+        return
+    
+    # Send header message
+    send_telegram(f"🕒 END OF DAY SIGNAL REPORT - {datetime.now().strftime('%d-%b-%Y')}\n"
+                  f"📈 Total Signals: {len(unique_signals)}\n"
+                  f"─────────────────────────────")
+    
+    # Send each signal in separate message
+    for i, signal in enumerate(unique_signals, 1):
+        # Get which targets were hit
+        targets_hit_list = []
+        if signal.get('targets_hit', 0) > 0:
+            for j in range(signal.get('targets_hit', 0)):
+                if j < len(signal['targets']):
+                    targets_hit_list.append(str(signal['targets'][j]))
+        
+        # Create detailed message for each signal
+        msg = (f"📊 SIGNAL #{i} - {signal['index']} {signal['strike']} {signal['option_type']}\n"
+               f"─────────────────────────────\n"
+               f"📅 Date: {datetime.now().strftime('%d-%b-%Y')}\n"
+               f"🕒 Time: {signal['timestamp']}\n"
+               f"📈 Index: {signal['index']}\n"
+               f"🎯 Strike: {signal['strike']}\n"
+               f"🔰 Type: {signal['option_type']}\n"
+               f"🏷️ Strategy: {signal['strategy']}\n\n"
+               
+               f"💰 ENTRY: ₹{signal['entry_price']}\n"
+               f"🎯 TARGETS: {signal['targets'][0]} // {signal['targets'][1]} // {signal['targets'][2]} // {signal['targets'][3]}\n"
+               f"🛑 STOP LOSS: ₹{signal['sl']}\n\n"
+               
+               f"📊 PERFORMANCE:\n"
+               f"• Entry Status: {signal.get('entry_status', 'PENDING')}\n"
+               f"• Targets Hit: {signal.get('targets_hit', 0)}/4\n")
+        
+        # Add which specific targets were hit
+        if targets_hit_list:
+            msg += f"• Targets Achieved: {', '.join(targets_hit_list)}\n"
+        
+        msg += (f"• Max Price Reached: ₹{signal.get('max_price_reached', signal['entry_price'])}\n"
+                f"• Final P&L: {signal.get('final_pnl', '0')} points\n\n"
+                
+                f"⚡ Fakeout: {'YES' if signal['fakeout'] else 'NO'}\n"
+                f"📈 Index Price at Signal: {signal['index_price']}\n"
+                f"🆔 Signal ID: {signal['signal_id']}\n"
+                f"─────────────────────────────")
+        
+        send_telegram(msg)
+        time.sleep(1)  # Small delay between messages to avoid rate limiting
+    
+    # Send summary
     total_pnl = 0
     successful_trades = 0
-    
-    for i, signal in enumerate(daily_signals, 1):
-        report += f"🔰 SIGNAL #{i}\n"
-        report += f"   • Timestamp: {signal['timestamp']}\n"
-        report += f"   • Index: {signal['index']}\n"
-        report += f"   • Strike: {signal['strike']}\n"
-        report += f"   • Type: {signal['option_type']}\n"
-        report += f"   • Strategy: {signal['strategy']}\n"
-        report += f"   • Entry Price: ₹{signal['entry_price']}\n"
-        report += f"   • Target 1: ₹{signal['targets'][0]}\n"
-        report += f"   • Target 2: ₹{signal['targets'][1]}\n"
-        report += f"   • Target 3: ₹{signal['targets'][2]}\n"
-        report += f"   • Target 4: ₹{signal['targets'][3]}\n"
-        report += f"   • Stop Loss: ₹{signal['sl']}\n"
-        report += f"   • Fakeout: {signal['fakeout']}\n"
-        report += f"   • Index Price: {signal['index_price']}\n"
-        report += f"   • Entry Status: {signal.get('entry_status', 'PENDING')}\n"
-        report += f"   • Targets Hit: {signal.get('targets_hit', 0)}/4\n"
-        report += f"   • Max Price Reached: ₹{signal.get('max_price_reached', signal['entry_price'])}\n"
-        report += f"   • Zero Targets Hit: {'Yes' if signal.get('zero_targets', True) else 'No'}\n"
-        report += f"   • No New Highs: {'Yes' if signal.get('no_new_highs', True) else 'No'}\n"
-        report += f"   • Final P&L: {signal.get('final_pnl', '0')}\n"
-        report += f"   • Signal ID: {signal['signal_id']}\n"
-        report += "-" * 40 + "\n\n"
-        
-        # Calculate P&L for summary
+    for signal in unique_signals:
         pnl_str = signal.get("final_pnl", "0")
         try:
             if pnl_str.startswith("+"):
@@ -1312,36 +1344,19 @@ def generate_end_of_day_report():
         except:
             pass
     
-    # Summary Section
-    report += "📈 SUMMARY\n"
-    report += "=" * 30 + "\n"
-    report += f"• Total Signals: {len(daily_signals)}\n"
-    report += f"• Successful Trades: {successful_trades}\n"
-    report += f"• Success Rate: {(successful_trades/len(daily_signals))*100:.1f}%\n"
-    report += f"• Total P&L: ₹{total_pnl:+.2f}\n\n"
+    summary_msg = (f"📈 DAY SUMMARY\n"
+                   f"─────────────────────────────\n"
+                   f"• Total Signals: {len(unique_signals)}\n"
+                   f"• Successful Trades: {successful_trades}\n"
+                   f"• Success Rate: {(successful_trades/len(unique_signals))*100:.1f}%\n"
+                   f"• Total P&L: ₹{total_pnl:+.2f}\n"
+                   f"─────────────────────────────")
     
-    # Strategy Performance
-    strategy_stats = {}
-    for signal in daily_signals:
-        strat = signal['strategy']
-        if strat not in strategy_stats:
-            strategy_stats[strat] = {'count': 0, 'success': 0}
-        strategy_stats[strat]['count'] += 1
-        pnl = signal.get("final_pnl", "0")
-        if pnl.startswith("+"):
-            strategy_stats[strat]['success'] += 1
-    
-    report += "🎯 STRATEGY PERFORMANCE\n"
-    report += "=" * 30 + "\n"
-    for strat, stats in strategy_stats.items():
-        success_rate = (stats['success']/stats['count'])*100 if stats['count'] > 0 else 0
-        report += f"• {strat}: {stats['count']} signals, {success_rate:.1f}% success rate\n"
-    
-    return report
+    send_telegram(summary_msg)
 
 # --------- UPDATED SIGNAL SENDING WITH STRATEGY TRACKING ---------
 def send_signal(index, side, df, fakeout, strategy_key):
-    global signal_counter
+    global signal_counter, all_generated_signals
     
     # Get ACTUAL index price where pattern was detected
     signal_detection_price = float(ensure_series(df["Close"]).iloc[-1])
@@ -1414,6 +1429,9 @@ def send_signal(index, side, df, fakeout, strategy_key):
         "final_pnl": "0"
     }
     
+    # 🚨 CRITICAL FIX: Track signal immediately when generated
+    all_generated_signals.append(signal_data.copy())
+    
     # Enhanced message with strategy info
     msg = (f"🟢 GIT🔊 {index} {strike} {side} - {strategy_name}\n"
            f"🔹 Strike: {strike}\n"
@@ -1485,9 +1503,8 @@ def run_algo_parallel():
     if should_stop_trading():
         global STOP_SENT
         if not STOP_SENT:
-            # Generate end of day report
-            report = generate_end_of_day_report()
-            send_telegram(report)
+            # Send individual signal reports instead of one big report
+            send_individual_signal_reports()
             send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
             STOP_SENT = True
         return
@@ -1503,7 +1520,6 @@ def run_algo_parallel():
     for t in threads: 
         t.join()
 
-# --------- START ---------
 # --------- START ---------
 MARKET_CLOSED_SENT = False
 
@@ -1528,7 +1544,7 @@ while True:
         if not STARTED_SENT:
             send_telegram("🚀 GIT ULTIMATE MASTER ALGO STARTED - All 8 Indices Running with STRATEGY TRACKING:\n"
                          "✅ Strategy Name in Every Signal\n"
-                         "✅ End-of-Day Performance Report\n"  
+                         "✅ Individual End-of-Day Signal Reports\n"  
                          "✅ Real-time Trade Monitoring\n"
                          "✅ Comprehensive P&L Tracking")
             STARTED_SENT = True
@@ -1537,9 +1553,8 @@ while True:
             
         if should_stop_trading():
             if not STOP_SENT:
-                # Generate final report before stopping
-                report = generate_end_of_day_report()
-                send_telegram(report)
+                # Send individual signal reports
+                send_individual_signal_reports()
                 send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
                 STOP_SENT = True
                 STARTED_SENT = False
