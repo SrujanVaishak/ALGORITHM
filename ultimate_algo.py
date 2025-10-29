@@ -95,6 +95,8 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 STARTED_SENT = False
 STOP_SENT = False
+# 🚨 NEW: ADD EOD REPORT SENT FLAG
+EOD_REPORT_SENT = False
 
 def send_telegram(msg, reply_to=None):
     try:
@@ -1168,7 +1170,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
         
         while True:
             if should_stop_trading():
-                # Update signal data before stopping
+                # Update signal data before stopping - SILENTLY (NO TELEGRAM MESSAGE)
                 signal_data.update({
                     "entry_status": "NOT_ENTERED" if not entry_price_achieved else "ENTERED",
                     "targets_hit": sum(targets_hit),
@@ -1178,7 +1180,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                     "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl)
                 })
                 daily_signals.append(signal_data)
-                send_telegram(f"🛑 Market closed - Stopping monitoring for {symbol}", reply_to=thread_id)
+                # 🚨 REMOVED: No "Market closed - Stopping monitoring" message
                 break
                 
             price = fetch_option_price(symbol)
@@ -1353,6 +1355,9 @@ def send_individual_signal_reports():
                    f"─────────────────────────────")
     
     send_telegram(summary_msg)
+    
+    # 🚨 NEW: ADD FINAL CONFIRMATION
+    send_telegram("✅ REPORTS SENT! Waiting for next day till market open...")
 
 # --------- UPDATED SIGNAL SENDING WITH STRATEGY TRACKING ---------
 def send_signal(index, side, df, fakeout, strategy_key):
@@ -1501,12 +1506,17 @@ def run_algo_parallel():
         return
         
     if should_stop_trading():
-        global STOP_SENT
+        global STOP_SENT, EOD_REPORT_SENT
         if not STOP_SENT:
-            # Send individual signal reports instead of one big report
-            send_individual_signal_reports()
             send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
             STOP_SENT = True
+            
+        # 🚨 NEW: COMPULSORY EOD REPORTS WITH PROPER TIMING
+        if not EOD_REPORT_SENT:
+            time.sleep(15)  # Wait for all monitoring threads to complete
+            send_individual_signal_reports()
+            EOD_REPORT_SENT = True
+            
         return
         
     threads = []
@@ -1535,6 +1545,8 @@ while True:
                 MARKET_CLOSED_SENT = True
                 STARTED_SENT = False  # Reset for next day
                 STOP_SENT = False     # Reset for next day
+                # 🚨 NEW: RESET EOD REPORT FLAG FOR NEXT DAY
+                EOD_REPORT_SENT = False
             
             # Just sleep, don't send repeated messages
             time.sleep(30)
@@ -1553,11 +1565,16 @@ while True:
             
         if should_stop_trading():
             if not STOP_SENT:
-                # Send individual signal reports
-                send_individual_signal_reports()
                 send_telegram("🛑 Market closing time reached - Algorithm stopped automatically")
                 STOP_SENT = True
                 STARTED_SENT = False
+                
+            # 🚨 NEW: COMPULSORY EOD REPORTS WITH PROPER TIMING
+            if not EOD_REPORT_SENT:
+                time.sleep(15)  # Wait for all monitoring threads to complete
+                send_individual_signal_reports()
+                EOD_REPORT_SENT = True
+                
             # Don't break, just sleep until next day
             time.sleep(60)
             continue
