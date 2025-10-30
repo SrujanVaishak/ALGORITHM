@@ -1156,22 +1156,22 @@ def institutional_flow_confirm(index, base_signal, df5):
 # --------- TRADE MONITORING AND TRACKING ---------
 active_trades = {}
 
-def calculate_pnl(entry, max_price, targets_hit, sl, targets):
+def calculate_pnl(entry, max_price_reached, targets_hit, sl, targets):
     """Calculate P&L based on targets hit and max price reached"""
     try:
-        if max_price <= sl:
+        if max_price_reached <= sl:
             return f"-{entry - sl}"
         
         targets_achieved = sum(targets_hit)
         if targets_achieved == 0:
-            if max_price > entry:
-                return f"+{max_price - entry}"
+            if max_price_reached > entry:
+                return f"+{max_price_reached - entry}"
             else:
                 return "0"
         
         # Calculate average target price for achieved targets
         achieved_prices = [target for i, target in enumerate(targets) if targets_hit[i]]
-        if achieved_prices:  # 🚨 CRITICAL FIX: Check if list is not empty
+        if achieved_prices:
             avg_exit = sum(achieved_prices) / len(achieved_prices)
             return f"+{avg_exit - entry}"
         else:
@@ -1200,7 +1200,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                     "max_price_reached": max_price_reached,
                     "zero_targets": sum(targets_hit) == 0,
                     "no_new_highs": max_price_reached <= entry,
-                    "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)  # ✅ FIXED: All parameters included
+                    "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)
                 })
                 daily_signals.append(signal_data)
                 break
@@ -1246,7 +1246,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                         "max_price_reached": max_price_reached,
                         "zero_targets": sum(targets_hit) == 0,
                         "no_new_highs": max_price_reached <= entry,
-                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)  # ✅ FIXED: All parameters included
+                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)
                     })
                     daily_signals.append(signal_data)
                     break
@@ -1260,7 +1260,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                         "max_price_reached": max_price_reached,
                         "zero_targets": False,
                         "no_new_highs": False,
-                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)  # ✅ FIXED: All parameters included
+                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)
                     })
                     daily_signals.append(signal_data)
                     break
