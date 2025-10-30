@@ -1156,6 +1156,29 @@ def institutional_flow_confirm(index, base_signal, df5):
 # --------- TRADE MONITORING AND TRACKING ---------
 active_trades = {}
 
+def calculate_pnl(entry, max_price, targets_hit, sl, targets):
+    """Calculate P&L based on targets hit and max price reached"""
+    try:
+        if max_price <= sl:
+            return f"-{entry - sl}"
+        
+        targets_achieved = sum(targets_hit)
+        if targets_achieved == 0:
+            if max_price > entry:
+                return f"+{max_price - entry}"
+            else:
+                return "0"
+        
+        # Calculate average target price for achieved targets
+        achieved_prices = [target for i, target in enumerate(targets) if targets_hit[i]]
+        if achieved_prices:  # 🚨 CRITICAL FIX: Check if list is not empty
+            avg_exit = sum(achieved_prices) / len(achieved_prices)
+            return f"+{avg_exit - entry}"
+        else:
+            return "0"
+    except Exception as e:
+        return "0"
+
 def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data):
     """Run monitoring in separate thread without blocking main signal generation"""
     def monitoring_thread():
@@ -1177,10 +1200,9 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                     "max_price_reached": max_price_reached,
                     "zero_targets": sum(targets_hit) == 0,
                     "no_new_highs": max_price_reached <= entry,
-                    "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl)
+                    "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)  # ✅ FIXED: All parameters included
                 })
                 daily_signals.append(signal_data)
-                # 🚨 REMOVED: No "Market closed - Stopping monitoring" message
                 break
                 
             price = fetch_option_price(symbol)
@@ -1224,7 +1246,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                         "max_price_reached": max_price_reached,
                         "zero_targets": sum(targets_hit) == 0,
                         "no_new_highs": max_price_reached <= entry,
-                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl)
+                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)  # ✅ FIXED: All parameters included
                     })
                     daily_signals.append(signal_data)
                     break
@@ -1238,7 +1260,7 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                         "max_price_reached": max_price_reached,
                         "zero_targets": False,
                         "no_new_highs": False,
-                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl)
+                        "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)  # ✅ FIXED: All parameters included
                     })
                     daily_signals.append(signal_data)
                     break
@@ -1250,26 +1272,11 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
     thread.daemon = True
     thread.start()
 
-def calculate_pnl(entry, max_price, targets_hit, sl):
-    """Calculate P&L based on targets hit and max price reached"""
-    if max_price <= sl:
-        return f"-{entry - sl}"
-    
-    targets_achieved = sum(targets_hit)
-    if targets_achieved == 0:
-        if max_price > entry:
-            return f"+{max_price - entry}"
-        else:
-            return "0"
-    
-    # Calculate average target price for achieved targets
-    achieved_prices = [target for i, target in enumerate(targets) if targets_hit[i]]
-    avg_exit = sum(achieved_prices) / len(achieved_prices)
-    return f"+{avg_exit - entry}"
-
 # --------- NEW INDIVIDUAL SIGNAL REPORTING ---------
 def send_individual_signal_reports():
     """Send each signal in separate detailed messages after market hours"""
+    global daily_signals, all_generated_signals, EOD_REPORT_SENT
+    
     # 🚨 CRITICAL FIX: Use BOTH daily_signals AND all_generated_signals
     all_signals = daily_signals + all_generated_signals
     
@@ -1283,6 +1290,7 @@ def send_individual_signal_reports():
     
     if not unique_signals:
         send_telegram("📊 END OF DAY REPORT\nNo signals generated today.")
+        EOD_REPORT_SENT = True
         return
     
     # Send header message
@@ -1358,6 +1366,7 @@ def send_individual_signal_reports():
     
     # 🚨 NEW: ADD FINAL CONFIRMATION
     send_telegram("✅ REPORTS SENT! Waiting for next day till market open...")
+    EOD_REPORT_SENT = True
 
 # --------- UPDATED SIGNAL SENDING WITH STRATEGY TRACKING ---------
 def send_signal(index, side, df, fakeout, strategy_key):
