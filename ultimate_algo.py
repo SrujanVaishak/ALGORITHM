@@ -78,6 +78,9 @@ signal_counter = 0
 # 🚨 NEW: Track ALL generated signals immediately
 all_generated_signals = []
 
+# 🚨 CRITICAL FIX: Global stop flag for monitoring threads
+stop_all_monitoring = False
+
 # --------- ANGEL ONE LOGIN ---------
 API_KEY = os.getenv("API_KEY")
 CLIENT_CODE = os.getenv("CLIENT_CODE")
@@ -1179,10 +1182,11 @@ def calculate_pnl(entry, max_price_reached, targets_hit, sl, targets):
     except Exception as e:
         return "0"
 
+# 🚨 CRITICAL FIX: UPDATED MONITORING FUNCTION
 def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_name, signal_data):
-    """Run monitoring in separate thread without blocking main signal generation"""
+    """Run monitoring in separate thread - WILL STOP WHEN MARKET CLOSES"""
     def monitoring_thread():
-        global daily_signals
+        global daily_signals, stop_all_monitoring
         
         last_high = entry
         weakness_sent = False
@@ -1191,20 +1195,8 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
         max_price_reached = entry
         targets_hit = [False] * len(targets)
         
-        while True:
-            if should_stop_trading():
-                # Update signal data before stopping - SILENTLY (NO TELEGRAM MESSAGE)
-                signal_data.update({
-                    "entry_status": "NOT_ENTERED" if not entry_price_achieved else "ENTERED",
-                    "targets_hit": sum(targets_hit),
-                    "max_price_reached": max_price_reached,
-                    "zero_targets": sum(targets_hit) == 0,
-                    "no_new_highs": max_price_reached <= entry,
-                    "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)
-                })
-                daily_signals.append(signal_data)
-                break
-                
+        # 🚨 FIXED: ONLY check stop_all_monitoring, NO should_stop_trading() check
+        while not stop_all_monitoring:
             price = fetch_option_price(symbol)
             if not price: 
                 time.sleep(10)
@@ -1266,6 +1258,17 @@ def monitor_price_live(symbol, entry, targets, sl, fakeout, thread_id, strategy_
                     break
             
             time.sleep(10)
+        
+        # 🚨 CRITICAL: Final update when thread stops due to stop_all_monitoring
+        signal_data.update({
+            "entry_status": "NOT_ENTERED" if not entry_price_achieved else "ENTERED",
+            "targets_hit": sum(targets_hit),
+            "max_price_reached": max_price_reached,
+            "zero_targets": sum(targets_hit) == 0,
+            "no_new_highs": max_price_reached <= entry,
+            "final_pnl": calculate_pnl(entry, max_price_reached, targets_hit, sl, targets)
+        })
+        daily_signals.append(signal_data)
     
     # Start monitoring in separate thread
     thread = threading.Thread(target=monitoring_thread)
@@ -1510,6 +1513,8 @@ def trade_thread(index):
 
 # --------- MAIN LOOP (ALL INDICES PARALLEL) ---------
 def run_algo_parallel():
+    global stop_all_monitoring
+    
     if not is_market_open(): 
         print("❌ Market closed - skipping iteration")
         return
@@ -1517,12 +1522,15 @@ def run_algo_parallel():
     if should_stop_trading():
         global STOP_SENT, EOD_REPORT_SENT
         if not STOP_SENT:
-            send_telegram("🛑 Market closed at 3:30 PM IST - Algorithm stopped")
+            send_telegram("🛑 Market closed at 3:30 PM IST - Stopping all monitoring...")
             STOP_SENT = True
             
-        # 🚨 NEW: COMPULSORY EOD REPORTS WITH PROPER TIMING
+        # 🚨 CRITICAL FIX: STOP ALL MONITORING THREADS FIRST
+        stop_all_monitoring = True
+        time.sleep(30)  # Wait 30 seconds for all threads to stop
+        
+        # 🚨 THEN SEND REPORTS
         if not EOD_REPORT_SENT:
-            time.sleep(15)  # Wait for all monitoring threads to complete
             send_individual_signal_reports()
             EOD_REPORT_SENT = True
             
@@ -1554,7 +1562,9 @@ while True:
                 MARKET_CLOSED_SENT = True
                 STARTED_SENT = False  # Reset for next day
                 STOP_SENT = False     # Reset for next day
-                # 🚨 NEW: RESET EOD REPORT FLAG FOR NEXT DAY
+                # 🚨 CRITICAL: RESET MONITORING FLAG FOR NEXT DAY
+                stop_all_monitoring = False
+                # 🚨 CRITICAL: RESET EOD REPORT FLAG FOR NEXT DAY
                 EOD_REPORT_SENT = False
             
             # Just sleep, don't send repeated messages
@@ -1578,9 +1588,11 @@ while True:
                 STOP_SENT = True
                 STARTED_SENT = False
                 
-            # 🚨 NEW: COMPULSORY EOD REPORTS WITH PROPER TIMING
+            # 🚨 CRITICAL FIX: STOP MONITORING THREADS FIRST, THEN SEND REPORTS
+            stop_all_monitoring = True
+            time.sleep(30)  # Wait for all monitoring threads to complete
+            
             if not EOD_REPORT_SENT:
-                time.sleep(15)  # Wait for all monitoring threads to complete
                 send_individual_signal_reports()
                 EOD_REPORT_SENT = True
                 
